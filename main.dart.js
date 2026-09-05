@@ -39722,7 +39722,7 @@ return B.m($.dQ().gdi(0),$async$oa)
 case 2:n=a8
 a6=J
 s=3
-return B.m(n.wa("      SELECT id, id_reg, url_evidencia \n      FROM lecturas_fenologia \n      WHERE url_evidencia IS NOT NULL \n        AND url_evidencia != \"\" \n        AND url_evidencia NOT LIKE 'http%'\n    "),$async$oa)
+return B.m(n.wa("      SELECT id, id_reg, url_evidencia \n      FROM lecturas_fenologia \n      WHERE url_evidencia IS NOT NULL \n        AND url_evidencia != '' \n        AND url_evidencia NOT LIKE 'http%'\n    "),$async$oa)
 case 3:a3=a6.aN(a8),e=t.N,d=t.O
 case 4:if(!a3.p()){s=5
 break}m=a3.gJ(a3)
