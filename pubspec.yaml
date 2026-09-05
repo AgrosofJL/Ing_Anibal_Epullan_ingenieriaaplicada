@@ -53,3 +53,4 @@ flutter:
   # 💡 ACA ES LO NUEVO: Inclusión de la carpeta del logo
   assets:
     - logo/logo.png
+    - logo/logo_anibal.png
