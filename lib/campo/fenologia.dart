@@ -11,7 +11,10 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
-import '../base/base.dart';
+import '../base/base.dart';import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
 import '../constantes/tema.dart';
 import '../widgets/soft_button.dart';
 
@@ -995,79 +998,94 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     );
   }
 
-  // ==========================================================================
-  // REPORTE PDF OFICIAL
-  // ==========================================================================
   Future<void> _exportarPdfIndividualVariedad(
-      Map<String, dynamic> grupo, List<List<Map<String, dynamic>>> muestreos) async {
-    final pdf = pw.Document();
-    final String anio = DateTime.now().year.toString();
+    Map<String, dynamic> grupo, List<List<Map<String, dynamic>>> muestreos) async {
+  final pdf = pw.Document();
+  final String anio = DateTime.now().year.toString();
 
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(30),
-        footer: (pw.Context context) {
-          return pw.Column(
-            children: [
-              pw.Divider(thickness: 0.8, color: PdfColors.grey300),
-              pw.SizedBox(height: 4),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text("Powered by AgroSoft J&L · Chimpay, Río Negro",
-                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
-                  pw.Text("Página ${context.pageNumber} de ${context.pagesCount}",
-                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
-                ],
-              ),
-            ],
-          );
-        },
-        build: (pw.Context context) => [
-          _buildCabeceraPdf("INFORME FENOLÓGICO POR VARIEDAD - TEMPORADA $anio"),
-          pw.SizedBox(height: 10),
-          pw.Container(
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(
-              color: const PdfColor.fromInt(0xFFF9FAFB),
-              borderRadius: pw.BorderRadius.circular(6),
-              border: pw.Border.all(color: const PdfColor.fromInt(0xFFE5E7EB)),
-            ),
-            child: pw.Row(
+  // Tratamiento seguro de la lista/set de cuadros para evitar errores de tipo
+  final rawCuadros = grupo['cuadros'];
+  final String textoCuadros = rawCuadros is Iterable
+      ? rawCuadros.map((e) => e.toString()).join(', ')
+      : (rawCuadros?.toString() ?? 'S/D');
+
+  pdf.addPage(
+    pw.MultiPage(
+      pageFormat: PdfPageFormat.a4,
+      margin: const pw.EdgeInsets.all(30),
+      footer: (pw.Context context) {
+        return pw.Column(
+          children: [
+            pw.Divider(thickness: 0.8, color: PdfColors.grey300),
+            pw.SizedBox(height: 4),
+            pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Text("CULTIVO: ${grupo['cultivo']}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
-                pw.Text("VARIEDAD: ${grupo['variedad']}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
-                pw.Text("CUADROS: ${(grupo['cuadros'] as Set<String>).join(', ')}", style: const pw.TextStyle(fontSize: 9)),
+                pw.Text("Powered by AgroSoft J&L · Chimpay, Río Negro",
+                    style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
+                pw.Text("Página ${context.pageNumber} de ${context.pagesCount}",
+                    style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
               ],
             ),
+          ],
+        );
+      },
+      build: (pw.Context context) => [
+        _buildCabeceraPdf("INFORME FENOLÓGICO POR VARIEDAD - TEMPORADA $anio"),
+        pw.SizedBox(height: 10),
+        pw.Container(
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(
+            color: const PdfColor.fromInt(0xFFF9FAFB),
+            borderRadius: pw.BorderRadius.circular(6),
+            border: pw.Border.all(color: const PdfColor.fromInt(0xFFE5E7EB)),
           ),
-          pw.SizedBox(height: 12),
-          pw.Text("MUESTREOS HISTÓRICOS Y EVOLUCIÓN",
-              style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold, color: const PdfColor.fromInt(0xFF1E6B4C))),
-          pw.SizedBox(height: 6),
-          pw.TableHelper.fromTextArray(
-            border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.6),
-            headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-            headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1E6B4C)),
-            cellStyle: const pw.TextStyle(fontSize: 8),
-            headers: ['FECHA', 'CUADRO', 'FILA/PL.', 'DESGLOSE DE ESTADOS Y %'],
-            data: muestreos.map((m) {
-              final cab = m.first;
-              final fecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString().split('T').first;
-              final String desg = m.map((sub) {
-                return "${sub['estado_codigo']} (${sub['valor_lectura']}%)";
-              }).join(" - ");
-              return [fecha, "Cuadro ${cab['cuadro']}", "F.${cab['fila']} Pl.${cab['planta_numero']}", desg];
-            }).toList(),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text("CULTIVO: ${grupo['cultivo'] ?? 'S/D'}",
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
+              pw.Text("VARIEDAD: ${grupo['variedad'] ?? 'S/D'}",
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
+              pw.Text("CUADROS: $textoCuadros",
+                  style: const pw.TextStyle(fontSize: 9)),
+            ],
           ),
-        ],
-      ),
-    );
+        ),
+        pw.SizedBox(height: 12),
+        pw.Text("MUESTREOS HISTÓRICOS Y EVOLUCIÓN",
+            style: pw.TextStyle(
+                fontSize: 10.5,
+                fontWeight: pw.FontWeight.bold,
+                color: const PdfColor.fromInt(0xFF1E6B4C))),
+        pw.SizedBox(height: 6),
+        pw.TableHelper.fromTextArray(
+          border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.6),
+          headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+          headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1E6B4C)),
+          cellStyle: const pw.TextStyle(fontSize: 8),
+          headers: const ['FECHA', 'CUADRO', 'FILA/PL.', 'DESGLOSE DE ESTADOS Y %'],
+          data: muestreos.map((m) {
+            if (m.isEmpty) return ['', '', '', ''];
+            final cab = m.first;
+            final fecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString().split('T').first;
+            final String desg = m.map((sub) {
+              return "${sub['estado_codigo'] ?? ''} (${sub['valor_lectura'] ?? 0}%)";
+            }).join(" - ");
+            return [
+              fecha,
+              "Cuadro ${cab['cuadro'] ?? ''}",
+              "F.${cab['fila'] ?? '-'} Pl.${cab['planta_numero'] ?? '-'}",
+              desg
+            ];
+          }).toList(),
+        ),
+      ],
+    ),
+  );
 
-    await _compartirArchivoPdf(pdf, "Fenologia_${grupo['variedad']}_$anio.pdf");
-  }
+  await _compartirArchivoPdf(pdf, "Fenologia_${grupo['variedad'] ?? 'Variedad'}_$anio.pdf");
+}
 
   pw.Widget _buildCabeceraPdf(String subtitulo) {
     return pw.Column(
@@ -1098,16 +1116,28 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
   }
 
   Future<void> _compartirArchivoPdf(pw.Document pdf, String nombreArchivo) async {
-    final List<int> bytes = await pdf.save();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/$nombreArchivo');
-    await file.writeAsBytes(bytes, flush: true);
+  final Uint8List bytes = await pdf.save();
 
+  if (kIsWeb) {
+    // 💡 Solución para Web / Safari: Abre visor nativo e imprimir/compartir sin tocar disco
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: nombreArchivo,
+    );
+  } else {
+    // Para móvil nativo (Android / iOS) enviando bytes directamente en memoria
     await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/pdf')],
+      [
+        XFile.fromData(
+          bytes,
+          name: nombreArchivo,
+          mimeType: 'application/pdf',
+        ),
+      ],
       text: 'Reporte Oficial de Fenología - ${widget.nombreProductor}',
     );
   }
+}
 
   void _verFoto(String url) {
     showDialog(
