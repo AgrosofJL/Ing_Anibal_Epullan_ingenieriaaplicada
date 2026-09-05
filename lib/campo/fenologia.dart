@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:excel/excel.dart' as xl;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -998,92 +999,332 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     );
   }
 
-  Future<void> _exportarPdfIndividualVariedad(
+ Future<void> _exportarPdfIndividualVariedad(
     Map<String, dynamic> grupo, List<List<Map<String, dynamic>>> muestreos) async {
   final pdf = pw.Document();
   final String anio = DateTime.now().year.toString();
 
-  // Tratamiento seguro de la lista/set de cuadros para evitar errores de tipo
+  // 1. Carga segura del logo (nunca detiene la ejecución si da 404 en Web)
+  pw.MemoryImage? logoImage;
+  try {
+    final ByteData bytes = await rootBundle.load('logo/logo_anibal.png');
+    logoImage = pw.MemoryImage(bytes.buffer.asUint8List());
+  } catch (_) {
+    try {
+      final ByteData bytesFallback = await rootBundle.load('logo/logo.png');
+      logoImage = pw.MemoryImage(bytesFallback.buffer.asUint8List());
+    } catch (_) {
+      logoImage = null;
+    }
+  }
+
+  // 2. Sanitización de cuadros
   final rawCuadros = grupo['cuadros'];
   final String textoCuadros = rawCuadros is Iterable
       ? rawCuadros.map((e) => e.toString()).join(', ')
       : (rawCuadros?.toString() ?? 'S/D');
 
+  // Colores corporativos AgroSoft
+  const colorVerdeOscuro = PdfColor.fromInt(0xFF134E32);
+  const colorVerdeSecundario = PdfColor.fromInt(0xFF1E6B4C);
+  const colorFondoGris = PdfColor.fromInt(0xFFF9FAFB);
+  const colorBorde = PdfColor.fromInt(0xFFE5E7EB);
+
+  // Función interna para calcular la semana del año
+  int obtenerSemanaDelAnio(DateTime date) {
+    final comienzoAnio = DateTime(date.year, 1, 1);
+    final diferenciaDias = date.difference(comienzoAnio).inDays;
+    return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
+  }
+
   pdf.addPage(
     pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(30),
+      header: (pw.Context context) {
+        return pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                // 💡 LOGO EN LA ESQUINA SUPERIOR IZQUIERDA
+                if (logoImage != null) ...[
+                  pw.Container(
+                    width: 46,
+                    height: 46,
+                    child: pw.Image(logoImage),
+                  ),
+                  pw.SizedBox(width: 14),
+                ],
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        "INGENIERÍA APLICADA · MONITOREO AGRONÓMICO",
+                        style: pw.TextStyle(
+                          fontSize: 8.5,
+                          fontWeight: pw.FontWeight.bold,
+                          color: colorVerdeSecundario,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      pw.SizedBox(height: 2),
+                      pw.Text(
+                        "REPORTE OFICIAL DE ESTADOS FENOLÓGICOS",
+                        style: pw.TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: pw.FontWeight.bold,
+                          color: colorVerdeOscuro,
+                        ),
+                      ),
+                      pw.Text(
+                        "Establecimiento: ${widget.nombreProductor.toUpperCase()}",
+                        style: pw.TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.grey800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: pw.BoxDecoration(
+                        color: colorFondoGris,
+                        borderRadius: pw.BorderRadius.circular(4),
+                        border: pw.Border.all(color: colorBorde, width: 0.8),
+                      ),
+                      child: pw.Text(
+                        "TEMPORADA $anio",
+                        style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          color: colorVerdeOscuro,
+                        ),
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      "Emisión: ${DateTime.now().day.toString().padLeft(2, '0')}/${DateTime.now().month.toString().padLeft(2, '0')}/${DateTime.now().year}",
+                      style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 6),
+            pw.Divider(thickness: 1.2, color: colorVerdeSecundario),
+            pw.SizedBox(height: 10),
+          ],
+        );
+      },
       footer: (pw.Context context) {
+        // 💡 PIE DE PÁGINA CORPORATIVO AGROSOFT J&L
         return pw.Column(
           children: [
-            pw.Divider(thickness: 0.8, color: PdfColors.grey300),
+            pw.Divider(thickness: 0.7, color: colorBorde),
             pw.SizedBox(height: 4),
             pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
-                pw.Text("Powered by AgroSoft J&L · Chimpay, Río Negro",
-                    style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
-                pw.Text("Página ${context.pageNumber} de ${context.pagesCount}",
-                    style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
+                pw.Row(
+                  children: [
+                    pw.Text(
+                      "AgroSoft J&L",
+                      style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro),
+                    ),
+                    pw.Text(
+                      " · Sistema Integral de Gestión Agrícola & Trazabilidad Fitosanitaria",
+                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
+                    ),
+                  ],
+                ),
+                pw.Text(
+                  "Página ${context.pageNumber} de ${context.pagesCount}",
+                  style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
+                ),
               ],
+            ),
+            pw.SizedBox(height: 2),
+            pw.Align(
+              alignment: pw.Alignment.centerLeft,
+              child: pw.Text(
+                "Documento técnico agronómico válido para auditorías de inocuidad y control de evolución fenológica.",
+                style: const pw.TextStyle(fontSize: 6.5, color: PdfColors.grey500),
+              ),
             ),
           ],
         );
       },
       build: (pw.Context context) => [
-        _buildCabeceraPdf("INFORME FENOLÓGICO POR VARIEDAD - TEMPORADA $anio"),
-        pw.SizedBox(height: 10),
+        // Ficha resumida del cuartel/variedad
         pw.Container(
-          padding: const pw.EdgeInsets.all(8),
+          padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: pw.BoxDecoration(
-            color: const PdfColor.fromInt(0xFFF9FAFB),
+            color: colorFondoGris,
             borderRadius: pw.BorderRadius.circular(6),
-            border: pw.Border.all(color: const PdfColor.fromInt(0xFFE5E7EB)),
+            border: pw.Border.all(color: colorBorde, width: 0.8),
           ),
           child: pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
-              pw.Text("CULTIVO: ${grupo['cultivo'] ?? 'S/D'}",
-                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
-              pw.Text("VARIEDAD: ${grupo['variedad'] ?? 'S/D'}",
-                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
-              pw.Text("CUADROS: $textoCuadros",
-                  style: const pw.TextStyle(fontSize: 9)),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text("ESPECIE / CULTIVO", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                  pw.Text("${grupo['cultivo'] ?? 'FRUTALES'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text("VARIEDAD BOTÁNICA", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                  pw.Text("${grupo['variedad'] ?? 'S/D'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text("CUADROS AUDITADOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                  pw.Text(textoCuadros, style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text("TOTAL MUESTREOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                  pw.Text("${muestreos.length} estaciones", style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                ],
+              ),
             ],
           ),
         ),
-        pw.SizedBox(height: 12),
-        pw.Text("MUESTREOS HISTÓRICOS Y EVOLUCIÓN",
-            style: pw.TextStyle(
-                fontSize: 10.5,
+        pw.SizedBox(height: 14),
+
+        pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+            pw.Text(
+              "HISTORIAL CRONOLÓGICO Y DINÁMICA DE ESTADOS (%)",
+              style: pw.TextStyle(
+                fontSize: 9.5,
                 fontWeight: pw.FontWeight.bold,
-                color: const PdfColor.fromInt(0xFF1E6B4C))),
+                color: colorVerdeOscuro,
+                letterSpacing: 0.3,
+              ),
+            ),
+            pw.Text(
+              "* Valores expresados en proporción porcentual de yemas/flores/frutos observados",
+              style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600),
+            ),
+          ],
+        ),
         pw.SizedBox(height: 6),
+
+        // 💡 TABLA TÉCNICA CON FECHA, SEMANA Y PORCENTAJES DESGLOSADOS
         pw.TableHelper.fromTextArray(
-          border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.6),
-          headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1E6B4C)),
-          cellStyle: const pw.TextStyle(fontSize: 8),
-          headers: const ['FECHA', 'CUADRO', 'FILA/PL.', 'DESGLOSE DE ESTADOS Y %'],
+          border: pw.TableBorder.all(color: colorBorde, width: 0.6),
+          headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+          headerDecoration: const pw.BoxDecoration(color: colorVerdeSecundario),
+          headerHeight: 22,
+          cellHeight: 20,
+          cellStyle: const pw.TextStyle(fontSize: 7.5),
+          cellAlignment: pw.Alignment.centerLeft,
+          headers: const [
+            'FECHA',
+            'SEM.',
+            'CUADRO',
+            'ESTACIÓN / PLANTA',
+            'ESTADO DOMINANTE',
+            'DISTRIBUCIÓN DE ESTADOS (%)',
+          ],
+          columnWidths: const {
+            0: pw.FixedColumnWidth(55),
+            1: pw.FixedColumnWidth(30),
+            2: pw.FixedColumnWidth(48),
+            3: pw.FixedColumnWidth(75),
+            4: pw.FixedColumnWidth(95),
+            5: pw.FlexColumnWidth(2),
+          },
           data: muestreos.map((m) {
-            if (m.isEmpty) return ['', '', '', ''];
+            if (m.isEmpty) return ['', '', '', '', '', ''];
             final cab = m.first;
-            final fecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString().split('T').first;
-            final String desg = m.map((sub) {
-              return "${sub['estado_codigo'] ?? ''} (${sub['valor_lectura'] ?? 0}%)";
-            }).join(" - ");
+
+            // Formateo de fecha y semana
+            final rawFecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString();
+            final DateTime? dt = DateTime.tryParse(rawFecha);
+            final String fechaStr = dt != null
+                ? "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}"
+                : rawFecha.split('T').first;
+            final String semStr = dt != null ? "S.${obtenerSemanaDelAnio(dt)}" : "S/-";
+
+            // Localizar el estado dominante (mayor porcentaje)
+            Map<String, dynamic>? dominante;
+            double maxPorcentaje = -1.0;
+            for (var sub in m) {
+              final val = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
+              if (val > maxPorcentaje) {
+                maxPorcentaje = val;
+                dominante = sub;
+              }
+            }
+
+            final String estadoDomTxt = dominante != null
+                ? "${dominante['estado_codigo']} (${maxPorcentaje.toInt()}%)"
+                : "S/D";
+
+            // Detalle concatenado con porcentajes
+            final String desgloseTotal = m.map((sub) {
+              final double p = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
+              return "${sub['estado_codigo']} : ${p.toStringAsFixed(0)}%";
+            }).join("  |  ");
+
             return [
-              fecha,
-              "Cuadro ${cab['cuadro'] ?? ''}",
-              "F.${cab['fila'] ?? '-'} Pl.${cab['planta_numero'] ?? '-'}",
-              desg
+              fechaStr,
+              semStr,
+              "Cuadro ${cab['cuadro'] ?? '-'}",
+              "Fila ${cab['fila'] ?? '-'} · Pl. ${cab['planta_numero'] ?? '-'}",
+              estadoDomTxt,
+              desgloseTotal,
             ];
           }).toList(),
+        ),
+
+        pw.SizedBox(height: 16),
+        // Cuadro de notas / observaciones de campo
+        pw.Container(
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(
+            color: colorFondoGris,
+            borderRadius: pw.BorderRadius.circular(6),
+            border: pw.Border.all(color: colorBorde, width: 0.8),
+          ),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                "CRITERIO TÉCNICO DE EVOLUCIÓN:",
+                style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text(
+                "El seguimiento fenológico semanal permite sincronizar las aplicaciones de inductores de cuaja, raleo químico y monitoreo de carpocapsa/grafolita en función de la susceptibilidad tisular del cultivo.",
+                style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
+              ),
+            ],
+          ),
         ),
       ],
     ),
   );
 
+  // Compartir PDF según plataforma (Web o Móvil)
   await _compartirArchivoPdf(pdf, "Fenologia_${grupo['variedad'] ?? 'Variedad'}_$anio.pdf");
 }
 
@@ -1119,13 +1360,11 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
   final Uint8List bytes = await pdf.save();
 
   if (kIsWeb) {
-    // 💡 Solución para Web / Safari: Abre visor nativo e imprimir/compartir sin tocar disco
     await Printing.sharePdf(
       bytes: bytes,
       filename: nombreArchivo,
     );
   } else {
-    // Para móvil nativo (Android / iOS) enviando bytes directamente en memoria
     await Share.shareXFiles(
       [
         XFile.fromData(
