@@ -179,127 +179,334 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
   // 📊 REPORTE EN EXCEL: VARIEDAD ARRIBA + MATRIZ DE ESTADOS CON "DD/MM VALOR%"
   // ==========================================================================
   Future<void> _exportarExcelCurvaFenologica() async {
-    if (_gruposVariedadMuestreadas.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay registros fenológicos para exportar.')),
-      );
-      return;
-    }
+  if (_gruposVariedadMuestreadas.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No hay registros fenológicos para exportar.')),
+    );
+    return;
+  }
 
-    final excel = xl.Excel.createExcel();
-    final defaultSheet = excel.getDefaultSheet();
-    if (defaultSheet != null) excel.delete(defaultSheet);
+  final excel = xl.Excel.createExcel();
+  final defaultSheet = excel.getDefaultSheet();
+  if (defaultSheet != null) excel.delete(defaultSheet);
 
-    final int anio = DateTime.now().year;
+  final int anio = DateTime.now().year;
 
-    for (var g in _gruposVariedadMuestreadas) {
-      final String variedad = g['variedad'] ?? 'Variedad';
-      final String cultivo = g['cultivo'] ?? 'Frutal';
-      final String sheetName = "$cultivo-$variedad".replaceAll('/', '-').replaceAll('\\', '-');
-      final xl.Sheet sheet = excel[sheetName.length > 30 ? sheetName.substring(0, 30) : sheetName];
+  // Función para calcular la semana fenológica
+  int obtenerSemanaDelAnio(DateTime date) {
+    final comienzoAnio = DateTime(date.year, 1, 1);
+    final diferenciaDias = date.difference(comienzoAnio).inDays;
+    return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
+  }
 
-      final List<Map<String, dynamic>> lecturas =
-          (g['lecturas'] as List).cast<Map<String, dynamic>>();
+  // Acumulador general para la hoja de Datos Crudos
+  final List<List<xl.CellValue>> filasDatosCrudos = [];
 
-      // 1. Título y datos de cabecera
-      sheet.appendRow([
-        xl.TextCellValue("AGROSOFT J&L - REPORTE DE EVOLUCIÓN FENOLÓGICA"),
-      ]);
-      sheet.appendRow([
-        xl.TextCellValue("ESTABLECIMIENTO:"),
+  // ==========================================================================
+  // 1. GENERACIÓN DE HOJAS POR VARIEDAD (MATRIZ DINÁMICA)
+  // ==========================================================================
+  for (var g in _gruposVariedadMuestreadas) {
+    final String variedad = (g['variedad'] ?? 'Variedad').toString();
+    final String cultivo = (g['cultivo'] ?? 'Frutal').toString();
+    
+    String rawSheetName = "$cultivo-$variedad"
+        .replaceAll('/', '-')
+        .replaceAll('\\', '-')
+        .replaceAll('?', '')
+        .replaceAll('*', '')
+        .replaceAll(':', '');
+    if (rawSheetName.length > 30) rawSheetName = rawSheetName.substring(0, 30);
+    
+    final xl.Sheet sheet = excel[rawSheetName];
+
+    final List<Map<String, dynamic>> lecturas =
+        (g['lecturas'] as List).cast<Map<String, dynamic>>();
+
+    final rawCuadros = g['cuadros'];
+    final String textoCuadros = rawCuadros is Iterable
+        ? rawCuadros.map((e) => e.toString()).join(', ')
+        : (rawCuadros?.toString() ?? 'S/D');
+
+    // Estilos de celdas
+    final estiloTitulo = xl.CellStyle(
+      bold: true,
+      fontSize: 13,
+      fontColorHex: xl.ExcelColor.fromHexString("#134E32"),
+    );
+
+    final estiloSubtitulo = xl.CellStyle(
+      bold: true,
+      fontSize: 10,
+      fontColorHex: xl.ExcelColor.fromHexString("#1E6B4C"),
+    );
+
+    final estiloHeaderTabla = xl.CellStyle(
+      bold: true,
+      fontSize: 10,
+      backgroundColorHex: xl.ExcelColor.fromHexString("#1E6B4C"),
+      fontColorHex: xl.ExcelColor.fromHexString("#FFFFFF"),
+      horizontalAlign: xl.HorizontalAlign.Center,
+      verticalAlign: xl.VerticalAlign.Center,
+    );
+
+    final estiloSemana = xl.CellStyle(
+      bold: true,
+      fontSize: 9,
+      backgroundColorHex: xl.ExcelColor.fromHexString("#E8F5E9"),
+      fontColorHex: xl.ExcelColor.fromHexString("#134E32"),
+      horizontalAlign: xl.HorizontalAlign.Center,
+    );
+
+    // --- ENCABEZADO INSTITUCIONAL ---
+    sheet.appendRow([xl.TextCellValue("AGROSOFT J&L · SISTEMA DE GESTIÓN FITOSANITARIA Y FENOLOGÍA")]);
+    sheet.row(0)[0]?.cellStyle = estiloTitulo;
+
+    sheet.appendRow([xl.TextCellValue("INFORME EJECUTIVO DE EVOLUCIÓN FENOLÓGICA Y CURVAS DE DESARROLLO")]);
+    sheet.row(1)[0]?.cellStyle = estiloSubtitulo;
+
+    sheet.appendRow([]); // Espacio
+
+    sheet.appendRow([
+      xl.TextCellValue("ESTABLECIMIENTO:"),
+      xl.TextCellValue(widget.nombreProductor.toUpperCase()),
+      xl.TextCellValue("TEMPORADA:"),
+      xl.IntCellValue(anio),
+      xl.TextCellValue("FECHA EMISIÓN:"),
+      xl.TextCellValue(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())),
+    ]);
+
+    sheet.appendRow([
+      xl.TextCellValue("ESPECIE / CULTIVO:"),
+      xl.TextCellValue(cultivo.toUpperCase()),
+      xl.TextCellValue("VARIEDAD BOTÁNICA:"),
+      xl.TextCellValue(variedad.toUpperCase()),
+      xl.TextCellValue("CUADROS AUDITADOS:"),
+      xl.TextCellValue(textoCuadros),
+    ]);
+
+    sheet.appendRow([]); // Espacio antes de la matriz
+
+    // --- RECOLECCIÓN DE FECHAS Y ESTADOS ---
+    final Set<String> fechasSet = {};
+    final Set<String> estadosSet = {};
+
+    for (var l in lecturas) {
+      final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
+      if (f.isNotEmpty) fechasSet.add(f);
+
+      final cod = (l['estado_codigo'] ?? '').toString().trim();
+      final desc = (l['descripcion_estado'] ?? '').toString().trim();
+      final label = cod.isNotEmpty ? "$cod - $desc" : desc;
+      if (label.isNotEmpty) estadosSet.add(label);
+
+      // Guardar también en la lista de datos crudos
+      DateTime? dtRaw = DateTime.tryParse(f);
+      filasDatosCrudos.add([
+        xl.TextCellValue((l['id_reg'] ?? l['id'] ?? '').toString()),
+        xl.TextCellValue(f),
+        xl.TextCellValue(dtRaw != null ? "Semana ${obtenerSemanaDelAnio(dtRaw)}" : "S/-"),
         xl.TextCellValue(widget.nombreProductor),
-        xl.TextCellValue("TEMPORADA:"),
-        xl.IntCellValue(anio),
+        xl.TextCellValue((l['chacra'] ?? 'Principal').toString()),
+        xl.TextCellValue((l['cuadro'] ?? '').toString()),
+        xl.TextCellValue((l['fila'] ?? '-').toString()),
+        xl.TextCellValue((l['planta_numero'] ?? '-').toString()),
+        xl.TextCellValue(cultivo),
+        xl.TextCellValue(variedad),
+        xl.TextCellValue(cod),
+        xl.TextCellValue(desc),
+        xl.DoubleCellValue(double.tryParse((l['valor_lectura'] ?? '0').toString()) ?? 0.0),
+        xl.TextCellValue((l['observaciones'] ?? l['obs'] ?? '').toString()),
+        xl.TextCellValue((l['url_evidencia'] ?? '').toString()),
       ]);
-      sheet.appendRow([
-        xl.TextCellValue("VARIEDAD:"),
-        xl.TextCellValue("$variedad ($cultivo)"),
-        xl.TextCellValue("CUADROS:"),
-        xl.TextCellValue((g['cuadros'] as Set<String>).join(', ')),
-      ]);
-      sheet.appendRow([]); // Fila libre
-
-      // 2. Extraer fechas únicas ordenadas y estados fenológicos únicos
-      final Set<String> fechasSet = {};
-      final Set<String> estadosSet = {};
-
-      for (var l in lecturas) {
-        final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
-        if (f.isNotEmpty) fechasSet.add(f);
-
-        final cod = (l['estado_codigo'] ?? '').toString().trim();
-        final desc = (l['descripcion_estado'] ?? '').toString().trim();
-        final label = cod.isNotEmpty ? "$cod ($desc)" : desc;
-        if (label.isNotEmpty) estadosSet.add(label);
-      }
-
-      final List<String> fechasOrdenadas = fechasSet.toList()..sort();
-      final List<String> estadosOrdenados = estadosSet.toList()..sort();
-
-      // Formato de fechas para cabecera: "DD/MM"
-      final List<String> fechasHeaderFormato = fechasOrdenadas.map((f) {
-        try {
-          final dt = DateTime.parse(f);
-          return DateFormat('dd/MM').format(dt);
-        } catch (_) {
-          return f;
-        }
-      }).toList();
-
-      // 3. Fila de Encabezados de la Matriz: [ESTADO FENOLÓGICO, DD/MM, DD/MM...]
-      sheet.appendRow([
-        xl.TextCellValue("ESTADOS FENOLÓGICOS"),
-        ...fechasHeaderFormato.map((f) => xl.TextCellValue(f)),
-      ]);
-
-      // 4. Renglones por cada Estado con su formato: "dd/mm valor%"
-      for (var estado in estadosOrdenados) {
-        final List<xl.CellValue> filaValores = [xl.TextCellValue(estado)];
-
-        for (int i = 0; i < fechasOrdenadas.length; i++) {
-          final fechaRaw = fechasOrdenadas[i];
-          final fechaFmt = fechasHeaderFormato[i];
-
-          // Filtrar lecturas de este estado en esta fecha
-          final matches = lecturas.where((l) {
-            final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
-            final cod = (l['estado_codigo'] ?? '').toString().trim();
-            final desc = (l['descripcion_estado'] ?? '').toString().trim();
-            final label = cod.isNotEmpty ? "$cod ($desc)" : desc;
-            return f == fechaRaw && label == estado;
-          });
-
-          if (matches.isNotEmpty) {
-            double suma = 0.0;
-            for (var m in matches) {
-              suma += double.tryParse(m['valor_lectura']?.toString() ?? '0') ?? 0.0;
-            }
-            final double prom = suma / matches.length;
-            // 💡 Formato exacto solicitado: "dd/mm valor%"
-            filaValores.add(xl.TextCellValue("$fechaFmt ${prom.toStringAsFixed(0)}%"));
-          } else {
-            filaValores.add(xl.TextCellValue("-"));
-          }
-        }
-
-        sheet.appendRow(filaValores);
-      }
-
-      sheet.appendRow([]);
     }
 
-    final bytes = excel.save();
-    if (bytes == null) return;
+    final List<String> fechasOrdenadas = fechasSet.toList()..sort();
+    final List<String> estadosOrdenados = estadosSet.toList()..sort();
 
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/Curva_Fenologia_${widget.nombreProductor}_$anio.xlsx');
-    await file.writeAsBytes(bytes, flush: true);
+    // Fila 1 de la matriz: Semanas del año
+    final List<xl.CellValue> filaSemanas = [xl.TextCellValue("SEMANA FENOLÓGICA")];
+    // Fila 2 de la matriz: Fechas DD/MM
+    final List<xl.CellValue> filaFechas = [xl.TextCellValue("ESTADO FENOLÓGICO / FECHA")];
 
+    for (var f in fechasOrdenadas) {
+      DateTime? dt = DateTime.tryParse(f);
+      if (dt != null) {
+        filaSemanas.add(xl.TextCellValue("SEM ${obtenerSemanaDelAnio(dt)}"));
+        filaFechas.add(xl.TextCellValue(DateFormat('dd/MM').format(dt)));
+      } else {
+        filaSemanas.add(xl.TextCellValue("SEM -"));
+        filaFechas.add(xl.TextCellValue(f));
+      }
+    }
+
+    sheet.appendRow(filaSemanas);
+    final int idxFilaSemana = sheet.maxRows - 1;
+    for (int col = 0; col < filaSemanas.length; col++) {
+      sheet.row(idxFilaSemana)[col]?.cellStyle = estiloSemana;
+    }
+
+    sheet.appendRow(filaFechas);
+    final int idxFilaFecha = sheet.maxRows - 1;
+    for (int col = 0; col < filaFechas.length; col++) {
+      sheet.row(idxFilaFecha)[col]?.cellStyle = estiloHeaderTabla;
+    }
+
+    // Mapa para calcular estado dominante por fecha
+    final Map<int, String> estadoDominantePorCol = {};
+    final Map<int, double> maxValorPorCol = {};
+
+    // --- LLENADO DE DATOS MATRICIALES ---
+    for (var estado in estadosOrdenados) {
+      final List<xl.CellValue> filaValores = [xl.TextCellValue(estado)];
+
+      for (int i = 0; i < fechasOrdenadas.length; i++) {
+        final fechaRaw = fechasOrdenadas[i];
+
+        final matches = lecturas.where((l) {
+          final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
+          final cod = (l['estado_codigo'] ?? '').toString().trim();
+          final desc = (l['descripcion_estado'] ?? '').toString().trim();
+          final label = cod.isNotEmpty ? "$cod - $desc" : desc;
+          return f == fechaRaw && label == estado;
+        });
+
+        if (matches.isNotEmpty) {
+          double suma = 0.0;
+          for (var m in matches) {
+            suma += double.tryParse(m['valor_lectura']?.toString() ?? '0') ?? 0.0;
+          }
+          final double prom = suma / matches.length;
+          filaValores.add(xl.TextCellValue("${prom.toStringAsFixed(0)}%"));
+
+          // Registrar si es el dominante en esta columna
+          if (prom > (maxValorPorCol[i] ?? -1.0)) {
+            maxValorPorCol[i] = prom;
+            estadoDominantePorCol[i] = estado.split(' - ').first;
+          }
+        } else {
+          filaValores.add(xl.TextCellValue("-"));
+        }
+      }
+
+      sheet.appendRow(filaValores);
+    }
+
+    // --- FILA DE CIERRE: ESTADO DOMINANTE ---
+    final List<xl.CellValue> filaDominante = [xl.TextCellValue("ESTADO DOMINANTE")];
+    for (int i = 0; i < fechasOrdenadas.length; i++) {
+      filaDominante.add(xl.TextCellValue(estadoDominantePorCol[i] ?? "-"));
+    }
+    sheet.appendRow(filaDominante);
+    final int idxFilaDom = sheet.maxRows - 1;
+    for (int col = 0; col < filaDominante.length; col++) {
+      sheet.row(idxFilaDom)[col]?.cellStyle = xl.CellStyle(
+        bold: true,
+        fontSize: 9,
+        backgroundColorHex: xl.ExcelColor.fromHexString("#FFF3E0"),
+        fontColorHex: xl.ExcelColor.fromHexString("#B78103"),
+        horizontalAlign: xl.HorizontalAlign.Center,
+      );
+    }
+
+    // Pie de página en la hoja
+    sheet.appendRow([]);
+    sheet.appendRow([
+      xl.TextCellValue("Powered by AgroSoft J&L · Chimpay, Río Negro · Sistema de Trazabilidad Agronómica")
+    ]);
+
+    // Ancho automático para la columna de estados
+    sheet.setColumnWidth(0, 38.0);
+    for (int col = 1; col <= fechasOrdenadas.length; col++) {
+      sheet.setColumnWidth(col, 14.0);
+    }
+  }
+
+  // ==========================================================================
+  // 2. GENERACIÓN DE HOJA MAESTRA: DATOS CRUDOS AUDITORÍA
+  // ==========================================================================
+  final xl.Sheet sheetCrudos = excel['DATOS_CRUDOS'];
+
+  final estiloHeaderCrudos = xl.CellStyle(
+    bold: true,
+    fontSize: 9,
+    backgroundColorHex: xl.ExcelColor.fromHexString("#263238"),
+    fontColorHex: xl.ExcelColor.fromHexString("#FFFFFF"),
+    horizontalAlign: xl.HorizontalAlign.Center,
+  );
+
+  final List<xl.CellValue> cabeceraCrudos = [
+    xl.TextCellValue("ID_REG"),
+    xl.TextCellValue("FECHA"),
+    xl.TextCellValue("SEMANA"),
+    xl.TextCellValue("PRODUCTOR"),
+    xl.TextCellValue("CHACRA"),
+    xl.TextCellValue("CUADRO"),
+    xl.TextCellValue("FILA"),
+    xl.TextCellValue("PLANTA"),
+    xl.TextCellValue("CULTIVO"),
+    xl.TextCellValue("VARIEDAD"),
+    xl.TextCellValue("COD_ESTADO"),
+    xl.TextCellValue("DESCRIPCION_ESTADO"),
+    xl.TextCellValue("VALOR_LECTURA_%"),
+    xl.TextCellValue("OBSERVACIONES"),
+    xl.TextCellValue("URL_EVIDENCIA"),
+  ];
+
+  sheetCrudos.appendRow(cabeceraCrudos);
+  for (int col = 0; col < cabeceraCrudos.length; col++) {
+    sheetCrudos.row(0)[col]?.cellStyle = estiloHeaderCrudos;
+  }
+
+  for (var fila in filasDatosCrudos) {
+    sheetCrudos.appendRow(fila);
+  }
+
+  // Autoajuste de anchos para la hoja de datos crudos
+  sheetCrudos.setColumnWidth(0, 10.0);
+  sheetCrudos.setColumnWidth(1, 13.0);
+  sheetCrudos.setColumnWidth(2, 14.0);
+  sheetCrudos.setColumnWidth(3, 24.0);
+  sheetCrudos.setColumnWidth(4, 16.0);
+  sheetCrudos.setColumnWidth(5, 12.0);
+  sheetCrudos.setColumnWidth(6, 10.0);
+  sheetCrudos.setColumnWidth(7, 10.0);
+  sheetCrudos.setColumnWidth(8, 14.0);
+  sheetCrudos.setColumnWidth(9, 18.0);
+  sheetCrudos.setColumnWidth(10, 14.0);
+  sheetCrudos.setColumnWidth(11, 28.0);
+  sheetCrudos.setColumnWidth(12, 18.0);
+  sheetCrudos.setColumnWidth(13, 30.0);
+  sheetCrudos.setColumnWidth(14, 40.0);
+
+  // ==========================================================================
+  // 3. EXPORTACIÓN SEGURO WEB Y MÓVIL (SIN USAR DART:IO FILE)
+  // ==========================================================================
+  final List<int>? fileBytes = excel.save();
+  if (fileBytes == null) return;
+
+  final Uint8List bytes = Uint8List.fromList(fileBytes);
+  final String nombreArchivo = 'Curva_Fenologia_${widget.nombreProductor.replaceAll(' ', '_')}_$anio.xlsx';
+
+  if (kIsWeb) {
+    // 💡 Safari / Chrome Web: Descarga directa en el navegador
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: nombreArchivo,
+    );
+  } else {
+    // Android / iOS Nativo
     await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
-      text: 'Planilla Curva Fenológica - ${widget.nombreProductor}',
+      [
+        XFile.fromData(
+          bytes,
+          name: nombreArchivo,
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ),
+      ],
+      text: 'Planilla Oficial de Evolución Fenológica - ${widget.nombreProductor}',
     );
   }
+}
 
   // ==========================================================================
   // MODAL DETALLE DE MUESTREOS DE LA VARIEDAD
@@ -1338,7 +1545,7 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                pw.Text("AGROSOFT J&L",
+                pw.Text("Ingeniero Agronomo Anibal Epullan - Ingenieria Aplicada al Agro.",
                     style: pw.TextStyle(
                         fontSize: 16, fontWeight: pw.FontWeight.bold, color: const PdfColor.fromInt(0xFF123F2C))),
                 pw.Text("SISTEMA DE GESTIÓN FITOSANITARIA Y FENOLOGÍA",

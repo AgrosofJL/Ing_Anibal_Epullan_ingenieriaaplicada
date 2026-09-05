@@ -1,13 +1,14 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import '../base/base.dart';
 
 class ServicioExportacionExcel {
   static Future<void> exportarRecetas() async {
     final db = await DatabaseHelper.instance.database;
-    
+
     // Traer siempre el detalle con estado activo
     final List<Map<String, dynamic>> registros = await db.query(
       'recetas_aplicaciones',
@@ -17,8 +18,8 @@ class ServicioExportacionExcel {
     );
 
     final excel = Excel.createExcel();
-    
-    // 💡 ACA ES LO NUEVO: Eliminar la hoja por defecto 'Sheet1' si existe
+
+    // Eliminar la hoja por defecto 'Sheet1' si existe
     if (excel.sheets.containsKey('Sheet1')) {
       excel.delete('Sheet1');
     }
@@ -26,7 +27,6 @@ class ServicioExportacionExcel {
     final Sheet sheet = excel['Recetas'];
     excel.setDefaultSheet('Recetas');
 
-    // 🛠️ ESTO LO MODIFIQUE: Uso de TextCellValue en lugar de CellValue.text
     final List<CellValue> headers = [
       TextCellValue('Cod Receta'),
       TextCellValue('Cod Orden'),
@@ -47,6 +47,19 @@ class ServicioExportacionExcel {
     ];
 
     sheet.appendRow(headers);
+
+    final estiloHeader = CellStyle(
+      bold: true,
+      fontSize: 10,
+      backgroundColorHex: ExcelColor.fromHexString('#1E6B4C'),
+      fontColorHex: ExcelColor.fromHexString('#FFFFFF'),
+      horizontalAlign: HorizontalAlign.Center,
+      verticalAlign: VerticalAlign.Center,
+    );
+
+    for (int col = 0; col < headers.length; col++) {
+      sheet.row(0)[col]?.cellStyle = estiloHeader;
+    }
 
     // Carga de filas con tipos de celda específicos
     for (var r in registros) {
@@ -70,15 +83,44 @@ class ServicioExportacionExcel {
       ]);
     }
 
-    final List<int>? bytes = excel.save();
-    if (bytes != null) {
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/reporte_aplicaciones_foliares.xlsx');
-      await file.writeAsBytes(bytes, flush: true);
+    // Autoajuste de anchos para legibilidad
+    sheet.setColumnWidth(0, 12.0);
+    sheet.setColumnWidth(1, 12.0);
+    sheet.setColumnWidth(2, 14.0);
+    sheet.setColumnWidth(3, 22.0);
+    sheet.setColumnWidth(4, 16.0);
+    sheet.setColumnWidth(5, 14.0);
+    sheet.setColumnWidth(6, 20.0);
+    sheet.setColumnWidth(7, 16.0);
+    sheet.setColumnWidth(8, 22.0);
+    sheet.setColumnWidth(9, 13.0);
+    sheet.setColumnWidth(10, 13.0);
+    sheet.setColumnWidth(11, 13.0);
+    sheet.setColumnWidth(12, 10.0);
+    sheet.setColumnWidth(13, 10.0);
+    sheet.setColumnWidth(14, 18.0);
+    sheet.setColumnWidth(15, 12.0);
 
-      // Compartir nativamente sin requerir permisos de almacenamiento en Android 13+
+    final List<int>? fileBytes = excel.save();
+    if (fileBytes == null) return;
+
+    final Uint8List bytes = Uint8List.fromList(fileBytes);
+    const String nombreArchivo = 'reporte_aplicaciones_foliares.xlsx';
+
+    if (kIsWeb) {
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: nombreArchivo,
+      );
+    } else {
       await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
+        [
+          XFile.fromData(
+            bytes,
+            name: nombreArchivo,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ),
+        ],
         text: 'Reporte de Recetas de Aplicación Foliar',
       );
     }

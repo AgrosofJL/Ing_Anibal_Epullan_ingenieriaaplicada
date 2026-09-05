@@ -1,3 +1,6 @@
+import 'package:aplicaciones_foliares/reportes/cuaderno_campo.dart';
+import 'package:aplicaciones_foliares/reportes/fenologia_reporte.dart';
+import 'package:aplicaciones_foliares/reportes/trampas_reportes.dart';
 import 'package:flutter/material.dart';
 import '../constantes/tema.dart';
 import '../servicios/exportar_excel.dart';
@@ -85,7 +88,7 @@ class MenuReportesScreen extends StatelessWidget {
                     icono: Icons.menu_book_rounded,
                     color: const Color(0xFF1E6B4C),
                     onTap: () {
-                      ServicioExportacionPdf.exportarRecetasPdf();
+                      CuadernoCampoScreen();
                     },
                   ),
                   _buildReporteCard(
@@ -95,11 +98,8 @@ class MenuReportesScreen extends StatelessWidget {
                     icono: Icons.pest_control_outlined,
                     color: AgroTheme.colorDanger,
                     onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Generando reporte de capturas de plagas..."),
-                        ),
-                      );
+                      ReportesTrampasScreen();
+                    
                     },
                   ),
                   _buildReporteCard(
@@ -108,11 +108,8 @@ class MenuReportesScreen extends StatelessWidget {
                         "Evolución de estados vegetativos y temperaturas críticas registradas.",
                     icono: Icons.eco_outlined,
                     color: const Color(0xFFB8862A),
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Generando reporte de estados fenológicos..."),
-                        ),
+                    onTap: () { Navigator.push(context,MaterialPageRoute(builder: (_) => const ReportesFenologiaScreen()),
+  
                       );
                     },
                   ),
