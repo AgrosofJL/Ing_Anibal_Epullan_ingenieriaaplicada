@@ -4,6 +4,10 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
 import '../base/base.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
 
 class ServicioExportacionPdf {
   static Future<void> exportarRecetasPdf() async {
@@ -39,9 +43,25 @@ class ServicioExportacionPdf {
       ),
     );
 
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/reporte_aplicaciones.pdf');
-    await file.writeAsBytes(await pdf.save());
-    await Share.shareXFiles([XFile(file.path)], text: 'Reporte PDF de Aplicaciones');
+    final Uint8List bytes = await pdf.save();
+const String nombreArchivo = 'reporte_aplicaciones.pdf';
+
+if (kIsWeb) {
+  await Printing.sharePdf(
+    bytes: bytes,
+    filename: nombreArchivo,
+  );
+} else {
+  await Share.shareXFiles(
+    [
+      XFile.fromData(
+        bytes,
+        name: nombreArchivo,
+        mimeType: 'application/pdf',
+      ),
+    ],
+    text: 'Reporte PDF de Aplicaciones',
+  );
+}
   }
 }

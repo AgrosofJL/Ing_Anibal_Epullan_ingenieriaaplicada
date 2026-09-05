@@ -4,6 +4,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../base/base.dart';
 
@@ -377,15 +381,29 @@ class ServicioExportarOrdenPdf {
       ),
     );
 
-    final List<int> bytes = await pdf.save();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/Orden_Aplicacion_$codOrden.pdf');
-    await file.writeAsBytes(bytes, flush: true);
+// 1. Guardar los bytes del documento
+final Uint8List bytes = await pdf.save();
+final String nombreArchivo = 'Orden_Aplicacion_$codOrden.pdf';
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/pdf')],
-      text: 'Orden Técnica de Aplicación Foliar #$codOrden - $nombreProductor',
-    );
+if (kIsWeb) {
+  // 💡 Solución Web / Safari: Dispara la descarga o visor nativo sin tocar disco
+  await Printing.sharePdf(
+    bytes: bytes,
+    filename: nombreArchivo,
+  );
+} else {
+  // Móvil nativo (Android / iOS clásico): Se envía directamente en memoria con XFile.fromData
+  await Share.shareXFiles(
+    [
+      XFile.fromData(
+        bytes,
+        name: nombreArchivo,
+        mimeType: 'application/pdf',
+      ),
+    ],
+    text: 'Orden Técnica de Aplicación Foliar #$codOrden - $nombreProductor',
+  );
+}
   }
 
   static pw.Widget _buildInfoItem(String label, String valor) {
