@@ -143,7 +143,7 @@ class ServicioExportarOrdenPdf {
                       pw.Column(
                         crossAxisAlignment: pw.CrossAxisAlignment.start,
                         children: [
-                          pw.Text("AGROSOFT J&L",
+                          pw.Text("Ing. Agronomo Anibal Epullan",
                               style: pw.TextStyle(
                                   fontSize: 15,
                                   fontWeight: pw.FontWeight.bold,
@@ -151,7 +151,7 @@ class ServicioExportarOrdenPdf {
                           pw.Text("SOLUCIONES INTEGRALES AGROPECUARIAS",
                               style: const pw.TextStyle(
                                   fontSize: 8, color: PdfColors.grey700)),
-                          pw.Text("CHIMPAY · RÍO NEGRO",
+                          pw.Text("RÍO NEGRO",
                               style: const pw.TextStyle(
                                   fontSize: 8, color: PdfColors.grey600)),
                         ],
