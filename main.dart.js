@@ -65059,7 +65059,7 @@ B.aLf.prototype={
 $1(a){var s=null,r=t.n_,q=B.c([],r),p=this.a.a
 if(p!=null)q.push(B.hs(s,B.aw_(p,A.p1),s,s,s,50,A.FJ,s,50))
 else{p=B.lg(s,B.nq(8),A.cv)
-q.push(B.hs(s,B.bj1(B.bI("AGRO",B.db(s,A.l4,s,s,s,s,s,s,s,A.au,s,s,10,s,A.aH,s,!0,s,s,s,s),s,s)),s,s,p,50,A.FJ,s,50))}q.push(B.hc(B.c([B.bI("AGROSOFT J&L",B.db(s,A.o0,s,s,s,s,s,s,s,A.au,s,s,15,s,A.aH,s,!0,s,s,s,s),s,s),B.bI("SOLUCIONES INTEGRALES AGROPECUARIAS",A.a98,s,s),B.bI("CHIMPAY \xb7 R\xcdO NEGRO",A.csi,s,s)],r),A.fY,A.bQ))
+q.push(B.hs(s,B.bj1(B.bI("AGRO",B.db(s,A.l4,s,s,s,s,s,s,s,A.au,s,s,10,s,A.aH,s,!0,s,s,s,s),s,s)),s,s,p,50,A.FJ,s,50))}q.push(B.hc(B.c([B.bI("Ing. Agronomo Anibal Epullan",B.db(s,A.o0,s,s,s,s,s,s,s,A.au,s,s,15,s,A.aH,s,!0,s,s,s,s),s,s),B.bI("SOLUCIONES INTEGRALES AGROPECUARIAS",A.a98,s,s),B.bI("R\xcdO NEGRO",A.csi,s,s)],r),A.fY,A.bQ))
 q=B.hz(q,A.bw,A.bQ)
 p=new B.jm(A.cv,1,A.el)
 p=B.lg(new B.jM(p,p,p,p),B.nq(8),A.ciC)
