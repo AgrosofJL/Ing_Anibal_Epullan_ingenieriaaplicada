@@ -14,7 +14,7 @@ class ServicioEvidencias {
       SELECT id, id_reg, url_evidencia 
       FROM lecturas_fenologia 
       WHERE url_evidencia IS NOT NULL 
-        AND url_evidencia != "" 
+        AND url_evidencia != '' 
         AND url_evidencia NOT LIKE 'http%'
     ''');
 
