@@ -1,9 +1,10 @@
-import 'dart:io';
+import 'dart:io' show Platform;
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -42,6 +43,15 @@ class _LoguerScreenState extends State<LoguerScreen> {
   }
 
   Future<void> _getDeviceIdentifier() async {
+    // 💡 Si corre en Safari / Web, se omite la consulta de hardware nativo
+    if (kIsWeb) {
+      if (!mounted) return;
+      setState(() {
+        _deviceIdentifier = "Safari PWA / Web Client";
+      });
+      return;
+    }
+
     final deviceInfo = DeviceInfoPlugin();
     String deviceId = "Unknown Device";
 
@@ -54,7 +64,7 @@ class _LoguerScreenState extends State<LoguerScreen> {
         deviceId = iosInfo.identifierForVendor ?? "Unknown iOS";
       }
     } catch (_) {
-      deviceId = "Error obteniendo dispositivo";
+      deviceId = "Dispositivo no reconocido";
     }
 
     if (!mounted) return;
@@ -65,7 +75,8 @@ class _LoguerScreenState extends State<LoguerScreen> {
 
   Future<void> _checkExistingSession() async {
     final prefs = await SharedPreferences.getInstance();
-    final bool loggedIn = (prefs.getBool('isLoggedIn') ?? false) || (prefs.getBool('isLogged') ?? false);
+    final bool loggedIn =
+        (prefs.getBool('isLoggedIn') ?? false) || (prefs.getBool('isLogged') ?? false);
     final bool licenciaActiva = prefs.getBool('licencia_activa') ?? true;
 
     if (loggedIn && licenciaActiva && mounted) {
@@ -73,7 +84,6 @@ class _LoguerScreenState extends State<LoguerScreen> {
     }
   }
 
-  // 💡 Autenticación híbrida: Intenta contra Supabase y si no hay red, recurre a SQLite local
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -83,7 +93,7 @@ class _LoguerScreenState extends State<LoguerScreen> {
     final String inputPass = _passwordController.text.trim();
     final prefs = await SharedPreferences.getInstance();
 
-    // 1. Verificación previa de licencia local
+    // 1. Verificación de licencia previa
     final bool licenciaActiva = prefs.getBool('licencia_activa') ?? true;
     if (!licenciaActiva) {
       if (mounted) {
@@ -96,7 +106,7 @@ class _LoguerScreenState extends State<LoguerScreen> {
     try {
       final supabase = Supabase.instance.client;
 
-      // Consulta en Supabase por correo u operario
+      // 2. Consulta en Supabase por correo o por nombre de operario
       final response = await supabase
           .from('usuarios')
           .select()
@@ -114,8 +124,9 @@ class _LoguerScreenState extends State<LoguerScreen> {
           return;
         }
 
-        // Validación de Device ID asignado
-        if (dbDevice.isNotEmpty && dbDevice != _deviceIdentifier) {
+        // 💡 OMITIR DEVICE SI ESTAMOS EN SAFARI / WEB
+        // Solo valida Device ID si NO es Web y el usuario tiene un device fijado en la BD
+        if (!kIsWeb && dbDevice.isNotEmpty && dbDevice != _deviceIdentifier) {
           if (mounted) setState(() => _isLoading = false);
           _showAdminDialog();
           return;
@@ -131,23 +142,31 @@ class _LoguerScreenState extends State<LoguerScreen> {
           'pass': response['pass'],
           'rol': response['rol'],
           'estado': response['estado'],
-          'cod_productor': response['cod_productor'] != null 
-              ? int.tryParse(response['cod_productor'].toString()) 
+          'cod_productor': response['cod_productor'] != null
+              ? int.tryParse(response['cod_productor'].toString())
               : null,
         };
 
-        await db.insert('usuarios', usuarioLocalRow, conflictAlgorithm: ConflictAlgorithm.replace);
+        await db.insert(
+          'usuarios',
+          usuarioLocalRow,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
 
-        // Guardar sesión unificada
+        // Guardar estado de sesión en SharedPreferences
         await prefs.setBool('isLoggedIn', true);
         await prefs.setBool('isLogged', true);
         await prefs.setInt('userId', usuarioLocalRow['id'] as int);
         await prefs.setString('userEmail', response['correo'] ?? '');
-        await prefs.setString('userName', response['operario'] ?? response['correo'] ?? 'Usuario');
-        await prefs.setString('userRole', (response['rol'] ?? 'OPERARIO').toString().toUpperCase());
+        await prefs.setString(
+            'userName', response['operario'] ?? response['correo'] ?? 'Usuario');
+        await prefs.setString(
+            'userRole', (response['rol'] ?? 'OPERARIO').toString().toUpperCase());
         await prefs.setInt(
           'userCodProductor',
-          response['cod_productor'] != null ? int.tryParse(response['cod_productor'].toString()) ?? 0 : 0,
+          response['cod_productor'] != null
+              ? int.tryParse(response['cod_productor'].toString()) ?? 0
+              : 0,
         );
 
         if (mounted) {
@@ -160,9 +179,9 @@ class _LoguerScreenState extends State<LoguerScreen> {
         }
       }
     } catch (e) {
-      debugPrint("Fallo de conexión remota, intentando validación offline local: $e");
+      debugPrint("Error remoto, probando respaldo offline: $e");
 
-      // 💡 Fallback Offline en SQLite si no hay conexión a internet
+      // 3. Fallback Offline en SQLite si no hay conexión
       try {
         final userLocal = await ServicioAuth.iniciarSesion(
           usuarioOCorreo: inputUser,
@@ -171,7 +190,9 @@ class _LoguerScreenState extends State<LoguerScreen> {
 
         if (userLocal != null) {
           final String localDevice = (userLocal['device'] ?? '').toString().trim();
-          if (localDevice.isNotEmpty && localDevice != _deviceIdentifier) {
+
+          // Omitir device también offline si es Web/Safari
+          if (!kIsWeb && localDevice.isNotEmpty && localDevice != _deviceIdentifier) {
             if (mounted) setState(() => _isLoading = false);
             _showAdminDialog();
             return;
@@ -198,7 +219,8 @@ class _LoguerScreenState extends State<LoguerScreen> {
       context: context,
       builder: (BuildContext context) {
         return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AgroTheme.radiusLg)),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AgroTheme.radiusLg)),
           backgroundColor: AgroTheme.colorSurface,
           child: Padding(
             padding: const EdgeInsets.all(24.0),
@@ -208,21 +230,27 @@ class _LoguerScreenState extends State<LoguerScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: AgroTheme.colorDanger.withOpacity(0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.lock_person_outlined, color: AgroTheme.colorDanger, size: 32),
+                      color: AgroTheme.colorDanger.withOpacity(0.1),
+                      shape: BoxShape.circle),
+                  child: const Icon(Icons.lock_person_outlined,
+                      color: AgroTheme.colorDanger, size: 32),
                 ),
                 const SizedBox(height: 16),
                 const Text(
                   "Acceso No Acreditado",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AgroTheme.colorText),
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AgroTheme.colorText),
                 ),
                 const SizedBox(height: 10),
                 const Text(
                   "Tu dispositivo o usuario no se encuentra en estado ACTIVO. Copiá el identificador y envialo al administrador.",
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, height: 1.4),
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: AgroTheme.colorTextSecondary,
+                      height: 1.4),
                 ),
                 const SizedBox(height: 20),
                 Container(
@@ -238,16 +266,16 @@ class _LoguerScreenState extends State<LoguerScreen> {
                         child: Text(
                           _deviceIdentifier,
                           style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: AgroTheme.colorText,
-                          ),
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AgroTheme.colorText),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.copy, size: 18, color: AgroTheme.colorTextSecondary),
+                        icon: const Icon(Icons.copy,
+                            size: 18, color: AgroTheme.colorTextSecondary),
                         onPressed: () {
                           Clipboard.setData(ClipboardData(text: _deviceIdentifier));
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -263,7 +291,10 @@ class _LoguerScreenState extends State<LoguerScreen> {
                   isSecondary: true,
                   onTap: () => Navigator.pop(context),
                   child: const Center(
-                    child: Text("Entendido", style: TextStyle(fontWeight: FontWeight.bold, color: AgroTheme.colorText)),
+                    child: Text("Entendido",
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AgroTheme.colorText)),
                   ),
                 ),
               ],
@@ -278,18 +309,23 @@ class _LoguerScreenState extends State<LoguerScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: AgroTheme.colorDanger,
-        content: Text(message, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+        content: Text(message,
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w500)),
       ),
     );
   }
 
   void _navigateToMenu() {
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MenuCentral()));
+    Navigator.pushReplacement(
+        context, MaterialPageRoute(builder: (_) => const MenuCentral()));
   }
 
   String _getFormattedDate() {
     final now = DateTime.now();
-    return DateFormat("EEEE dd 'DE' MMMM 'DE' yyyy", 'es').format(now).toUpperCase();
+    return DateFormat("EEEE dd 'DE' MMMM 'DE' yyyy", 'es')
+        .format(now)
+        .toUpperCase();
   }
 
   @override
@@ -304,9 +340,12 @@ class _LoguerScreenState extends State<LoguerScreen> {
               left: 20,
               child: Row(
                 children: const [
-                  Icon(Icons.person_outline, size: 18, color: AgroTheme.colorTextSecondary),
+                  Icon(Icons.person_outline,
+                      size: 18, color: AgroTheme.colorTextSecondary),
                   SizedBox(width: 6),
-                  Text('', style: TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 12)),
+                  Text('',
+                      style: TextStyle(
+                          color: AgroTheme.colorTextSecondary, fontSize: 12)),
                 ],
               ),
             ),
@@ -315,7 +354,10 @@ class _LoguerScreenState extends State<LoguerScreen> {
               right: 20,
               child: Text(
                 _getFormattedDate(),
-                style: const TextStyle(color: AgroTheme.colorText, fontSize: 11, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                    color: AgroTheme.colorText,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700),
               ),
             ),
             Center(
@@ -334,7 +376,10 @@ class _LoguerScreenState extends State<LoguerScreen> {
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(color: AgroTheme.colorBorder),
                           boxShadow: const [
-                            BoxShadow(color: Color(0x08141E18), blurRadius: 20, offset: Offset(0, 8))
+                            BoxShadow(
+                                color: Color(0x08141E18),
+                                blurRadius: 20,
+                                offset: Offset(0, 8))
                           ],
                         ),
                         child: ClipRRect(
@@ -343,7 +388,8 @@ class _LoguerScreenState extends State<LoguerScreen> {
                             'logo/logo.png',
                             fit: BoxFit.cover,
                             errorBuilder: (context, error, stackTrace) =>
-                                const Icon(Icons.agriculture_rounded, size: 44, color: AgroTheme.colorAccent),
+                                const Icon(Icons.agriculture_rounded,
+                                    size: 44, color: AgroTheme.colorAccent),
                           ),
                         ),
                       ),
@@ -359,22 +405,33 @@ class _LoguerScreenState extends State<LoguerScreen> {
                       ),
                       const Text(
                         "AgroSoft · Soluciones Integrales",
-                        style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: AgroTheme.colorTextSecondary,
+                            fontWeight: FontWeight.w500),
                       ),
                       const SizedBox(height: 6),
+                      // En web / Safari muestra el modo navegador; en app nativa muestra el Device ID
                       Text(
-                        "Device ID: $_deviceIdentifier",
-                        style: const TextStyle(fontSize: 11, color: AgroTheme.colorTextSecondary),
+                        kIsWeb
+                            ? "Plataforma: Safari Web / PWA"
+                            : "Device ID: $_deviceIdentifier",
+                        style: const TextStyle(
+                            fontSize: 11, color: AgroTheme.colorTextSecondary),
                       ),
                       const SizedBox(height: 32),
                       Container(
                         padding: const EdgeInsets.all(26),
                         decoration: BoxDecoration(
                           color: AgroTheme.colorSurface,
-                          borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
+                          borderRadius:
+                              BorderRadius.circular(AgroTheme.radiusLg),
                           border: Border.all(color: AgroTheme.colorBorder),
                           boxShadow: const [
-                            BoxShadow(color: Color(0x0A141E18), blurRadius: 30, offset: Offset(0, 10))
+                            BoxShadow(
+                                color: Color(0x0A141E18),
+                                blurRadius: 30,
+                                offset: Offset(0, 10))
                           ],
                         ),
                         child: Column(
@@ -382,39 +439,53 @@ class _LoguerScreenState extends State<LoguerScreen> {
                             TextFormField(
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
-                              style: const TextStyle(color: AgroTheme.colorText, fontSize: 14),
+                              style: const TextStyle(
+                                  color: AgroTheme.colorText, fontSize: 14),
                               decoration: InputDecoration(
                                 hintText: "Email u Usuario",
-                                hintStyle: const TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 14),
-                                prefixIcon: const Icon(Icons.mail_outline, size: 20, color: AgroTheme.colorTextSecondary),
+                                hintStyle: const TextStyle(
+                                    color: AgroTheme.colorTextSecondary,
+                                    fontSize: 14),
+                                prefixIcon: const Icon(Icons.mail_outline,
+                                    size: 20,
+                                    color: AgroTheme.colorTextSecondary),
                                 filled: true,
                                 fillColor: AgroTheme.colorBg,
                                 border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                  borderRadius: BorderRadius.circular(
+                                      AgroTheme.radiusMd),
                                   borderSide: BorderSide.none,
                                 ),
                               ),
-                              validator: (val) =>
-                                  val == null || val.trim().isEmpty ? "Ingresá tu correo u usuario" : null,
+                              validator: (val) => val == null || val.trim().isEmpty
+                                  ? "Ingresá tu correo u usuario"
+                                  : null,
                             ),
                             const SizedBox(height: 16),
                             TextFormField(
                               controller: _passwordController,
                               obscureText: true,
-                              style: const TextStyle(color: AgroTheme.colorText, fontSize: 14),
+                              style: const TextStyle(
+                                  color: AgroTheme.colorText, fontSize: 14),
                               decoration: InputDecoration(
                                 hintText: "Contraseña",
-                                hintStyle: const TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 14),
-                                prefixIcon: const Icon(Icons.lock_outline, size: 20, color: AgroTheme.colorTextSecondary),
+                                hintStyle: const TextStyle(
+                                    color: AgroTheme.colorTextSecondary,
+                                    fontSize: 14),
+                                prefixIcon: const Icon(Icons.lock_outline,
+                                    size: 20,
+                                    color: AgroTheme.colorTextSecondary),
                                 filled: true,
                                 fillColor: AgroTheme.colorBg,
                                 border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                  borderRadius: BorderRadius.circular(
+                                      AgroTheme.radiusMd),
                                   borderSide: BorderSide.none,
                                 ),
                               ),
-                              validator: (val) =>
-                                  val == null || val.trim().isEmpty ? "Ingresá tu contraseña" : null,
+                              validator: (val) => val == null || val.trim().isEmpty
+                                  ? "Ingresá tu contraseña"
+                                  : null,
                             ),
                             const SizedBox(height: 24),
                             SizedBox(
@@ -427,11 +498,16 @@ class _LoguerScreenState extends State<LoguerScreen> {
                                       ? const SizedBox(
                                           width: 22,
                                           height: 22,
-                                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.2),
+                                          child: CircularProgressIndicator(
+                                              color: Colors.white,
+                                              strokeWidth: 2.2),
                                         )
                                       : const Text(
                                           "Iniciar Sesión",
-                                          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700),
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w700),
                                         ),
                                 ),
                               ),
