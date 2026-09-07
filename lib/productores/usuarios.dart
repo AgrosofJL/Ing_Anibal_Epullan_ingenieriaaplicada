@@ -28,8 +28,12 @@ class _UsuariosScreenState extends State<UsuariosScreen> {
   String _filtroTexto = "";
   final TextEditingController _searchCtrl = TextEditingController();
 
-  String _urlIphone = "https://agrosofjl.github.io/Ing_Anibal_Epullan_ingenieriaaplicada/";
+  // Enlaces e instrucciones cargados dinámicamente desde config_app_enlaces
+  String _urlApple = "https://agrosofjl.github.io/Ing_Anibal_Epullan_ingenieriaaplicada/";
+  String _instruccionesApple = "1. Abrí el link en Safari.\n2. Tocá Compartir (ícono del cuadrado con flecha).\n3. Elegí 'Agregar a pantalla de inicio'.";
+
   String _urlAndroid = "https://agrosofjl.github.io/Ing_Anibal_Epullan_ingenieriaaplicada/";
+  String _instruccionesAndroid = "1. Abrí el link y descargá el archivo APK.\n2. Si el teléfono lo solicita, aceptá 'Instalar aplicaciones de fuentes desconocidas'.\n3. Abrí la app e ingresá con tus datos.";
 
   @override
   void initState() {
@@ -48,28 +52,39 @@ class _UsuariosScreenState extends State<UsuariosScreen> {
     await _cargarUsuarios();
   }
 
+  // 💡 Carga dinámica de la tabla config_app_enlaces reconociendo APPLE y ANDROID
   Future<void> _cargarConfiguracionEnlaces() async {
+    void procesarRegistros(List<Map<String, dynamic>> filas) {
+      for (var row in filas) {
+        final plat = (row['plataforma'] ?? '').toString().toUpperCase().trim();
+        final url = (row['url_instalacion'] ?? '').toString().trim();
+        final instr = (row['instrucciones'] ?? '').toString().trim();
+
+        if ((plat == 'APPLE' || plat == 'IPHONE') && url.isNotEmpty) {
+          _urlApple = url;
+          if (instr.isNotEmpty) _instruccionesApple = instr;
+        } else if (plat == 'ANDROID' && url.isNotEmpty) {
+          _urlAndroid = url;
+          if (instr.isNotEmpty) _instruccionesAndroid = instr;
+        }
+      }
+    }
+
     try {
       final db = await DatabaseHelper.instance.database;
-      final res = await db.query('config_app_enlaces');
-      for (var row in res) {
-        final plat = (row['plataforma'] ?? '').toString().toUpperCase();
-        final url = (row['url_instalacion'] ?? '').toString();
-        if (plat == 'IPHONE' && url.isNotEmpty) _urlIphone = url;
-        if (plat == 'ANDROID' && url.isNotEmpty) _urlAndroid = url;
+      final resLocal = await db.query('config_app_enlaces');
+      if (resLocal.isNotEmpty) {
+        procesarRegistros(resLocal);
       }
-    } catch (_) {
-      try {
-        final supabase = Supabase.instance.client;
-        final res = await supabase.from('config_app_enlaces').select();
-        for (var row in res) {
-          final plat = (row['plataforma'] ?? '').toString().toUpperCase();
-          final url = (row['url_instalacion'] ?? '').toString();
-          if (plat == 'IPHONE' && url.isNotEmpty) _urlIphone = url;
-          if (plat == 'ANDROID' && url.isNotEmpty) _urlAndroid = url;
-        }
-      } catch (_) {}
-    }
+    } catch (_) {}
+
+    try {
+      final supabase = Supabase.instance.client;
+      final resRemoto = await supabase.from('config_app_enlaces').select();
+      if (resRemoto.isNotEmpty) {
+        procesarRegistros(List<Map<String, dynamic>>.from(resRemoto));
+      }
+    } catch (_) {}
   }
 
   Future<void> _cargarUsuarios() async {
@@ -111,38 +126,60 @@ class _UsuariosScreenState extends State<UsuariosScreen> {
     }
   }
 
+  // 💡 Envío condicional: Si es APPLE solo envía el link web; si es ANDROID manda la URL de descarga y el Device ID
   void _compartirCredencialesWhatsApp({
     required String operario,
     required String correo,
     required String pass,
     required String rol,
-    required String plataforma,
+    required String plataforma, // 'APPLE' o 'ANDROID'
     String? device,
   }) {
-    final bool esIphone = plataforma == 'IPHONE';
-    final String enlaceDescarga = esIphone ? _urlIphone : _urlAndroid;
+    final bool esApple = plataforma == 'APPLE' || plataforma == 'IPHONE';
+    final String enlace = esApple ? _urlApple : _urlAndroid;
+    final String instrucciones = esApple ? _instruccionesApple : _instruccionesAndroid;
 
-    final String guiaInstalacion = esIphone
-        ? "1. Abrí el link en *Safari*.\n2. Tocá el botón Compartir (cuadrado con flecha hacia arriba).\n3. Elegí *'Agregar a pantalla de inicio'*."
-        : "1. Abrí el link y descargá el archivo instalador APK.\n2. Permití *'Instalar apps de fuentes desconocidas'* si te lo solicita.\n3. Instalá y abrí la aplicación.";
+    String mensaje;
 
-    final String detalleDevice = (!esIphone && device != null && device.isNotEmpty)
-        ? "\n📱 *Device ID Registrado:* `$device`\n"
-        : "";
-
-    final mensaje = '''
+    if (esApple) {
+      // Formato para iPhone / iPad (Safari PWA directo sin device)
+      mensaje = '''
 🌱 *AGROSOFT J&L · ACCESO AL SISTEMA*
-Hola *$operario*, acá tenés tu cuenta para ingresar al establecimiento *${widget.nombreProductor}*:
+Hola *$operario*, te compartimos tu acceso para el establecimiento *${widget.nombreProductor}*:
 
-📱 *Plataforma:* ${esIphone ? "iPhone / iPad (Safari PWA)" : "Android (APK)"}
-🌐 *Link de Instalación:* $enlaceDescarga
+🍏 *Dispositivo:* iPhone / iPad (Apple)
+🌐 *Link de la Aplicación:*
+$enlace
 
-👤 *Usuario / Email:* $correo
+👤 *Usuario:* $correo
 🔑 *Contraseña:* $pass
-🔰 *Rol:* $rol$detalleDevice
-*Pasos de instalación:*
-$guiaInstalacion
+🔰 *Rol:* $rol
+
+📲 *Cómo instalarla en tu iPhone:*
+$instrucciones
 ''';
+    } else {
+      // Formato para Android (Instalador APK con control de Device ID)
+      final String devText = (device != null && device.trim().isNotEmpty)
+          ? "📱 *Device ID Asignado:* `$device`\n"
+          : "⚠️ *Importante:* Al abrir la app, si te aparece 'Acceso No Acreditado', copiá el código que te muestra y enviamelo por acá para habilitar tu teléfono.\n";
+
+      mensaje = '''
+🌱 *AGROSOFT J&L · ACCESO AL SISTEMA*
+Hola *$operario*, te compartimos los datos para instalar la aplicación en *${widget.nombreProductor}*:
+
+🤖 *Dispositivo:* Teléfono Android
+🌐 *Descargar App (Instalador APK):*
+$enlace
+
+👤 *Usuario:* $correo
+🔑 *Contraseña:* $pass
+🔰 *Rol:* $rol
+$devText
+📲 *Instrucciones de Instalación:*
+$instrucciones
+''';
+    }
 
     Share.share(mensaje, subject: 'Acceso AgroSoft - ${widget.nombreProductor}');
   }
@@ -164,10 +201,10 @@ $guiaInstalacion
         : "OPERARIO";
     String estadoSeleccionado = (usuarioExistente?['estado'] ?? 'ACTIVO').toString().toUpperCase();
 
-    // Si ya tiene device asignado o no es edición, predeterminamos según corresponda
-    String plataformaSeleccionada = (usuarioExistente?['device'] ?? '').toString().isNotEmpty
+    // Si tiene device asignado asumimos Android; si no, Apple
+    String plataformaSeleccionada = (usuarioExistente?['device'] ?? '').toString().trim().isNotEmpty
         ? "ANDROID"
-        : "IPHONE";
+        : "APPLE";
 
     showModalBottomSheet(
       context: context,
@@ -228,7 +265,7 @@ $guiaInstalacion
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text("Dispositivo del Usuario (Para envío de app):",
+                            const Text("Plataforma del Dispositivo:",
                                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: AgroTheme.colorAccentDark)),
                             const SizedBox(height: 6),
                             DropdownButtonFormField<String>(
@@ -236,7 +273,7 @@ $guiaInstalacion
                               decoration: _inputDecoration("Plataforma / Teléfono", Icons.phone_iphone_rounded),
                               items: const [
                                 DropdownMenuItem(
-                                  value: "IPHONE",
+                                  value: "APPLE",
                                   child: Row(
                                     children: [
                                       Icon(Icons.apple_rounded, size: 18, color: Colors.black87),
@@ -251,15 +288,15 @@ $guiaInstalacion
                                     children: [
                                       Icon(Icons.android_rounded, size: 18, color: Color(0xFF3DDC84)),
                                       SizedBox(width: 8),
-                                      Text("Android (Instalador / APK)"),
+                                      Text("Android (Instalador APK)"),
                                     ],
                                   ),
                                 ),
                               ],
                               onChanged: (v) {
                                 setModalState(() {
-                                  plataformaSeleccionada = v ?? "IPHONE";
-                                  if (plataformaSeleccionada == "IPHONE") {
+                                  plataformaSeleccionada = v ?? "APPLE";
+                                  if (plataformaSeleccionada == "APPLE") {
                                     deviceCtrl.clear();
                                   }
                                 });
@@ -267,7 +304,7 @@ $guiaInstalacion
                             ),
                             const SizedBox(height: 14),
 
-                            // ACA ES LO NUEVO: Campo Device ID exclusivo si elige Android
+                            // Campo de Device ID visible exclusivamente para Android
                             if (plataformaSeleccionada == "ANDROID") ...[
                               Container(
                                 padding: const EdgeInsets.all(12),
@@ -484,6 +521,7 @@ $guiaInstalacion
     );
   }
 
+  // Selector al tocar el ícono de compartir de la tarjeta
   void _mostrarSelectorReenvio(Map<String, dynamic> u) {
     showModalBottomSheet(
       context: context,
@@ -499,15 +537,15 @@ $guiaInstalacion
               Text("Enviar Acceso a ${u['operario']}",
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AgroTheme.colorText)),
               const SizedBox(height: 6),
-              const Text("Elegí el dispositivo que usará para adjuntar el enlace e instrucciones correspondientes:",
+              const Text("Elegí el dispositivo que usará para adjuntar el enlace correspondiente:",
                   style: TextStyle(fontSize: 12.5, color: AgroTheme.colorTextSecondary)),
               const SizedBox(height: 18),
               ListTile(
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 tileColor: AgroTheme.colorBg,
                 leading: const Icon(Icons.apple_rounded, size: 28, color: Colors.black87),
-                title: const Text("iPhone / iPad (Apple)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                subtitle: const Text("Envía enlace de Safari PWA (omite Device ID)", style: TextStyle(fontSize: 11.5)),
+                title: const Text("Apple (iPhone / iPad)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: const Text("Envía solo el link de la app en Safari", style: TextStyle(fontSize: 11.5)),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
                 onTap: () {
                   Navigator.pop(bCtx);
@@ -516,7 +554,7 @@ $guiaInstalacion
                     correo: u['correo'] ?? '',
                     pass: u['pass'] ?? '',
                     rol: u['rol'] ?? 'PROD-OPE',
-                    plataforma: 'IPHONE',
+                    plataforma: 'APPLE',
                   );
                 },
               ),
@@ -528,8 +566,8 @@ $guiaInstalacion
                 title: const Text("Android", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 subtitle: Text(
                   (u['device'] ?? '').toString().isNotEmpty
-                      ? "Device ID vinculado: ${u['device']}"
-                      : "Envía el instalador APK y guía de vinculación",
+                      ? "Device ID: ${u['device']}"
+                      : "Envía el instalador APK y solicitud de Device ID",
                   style: const TextStyle(fontSize: 11.5),
                 ),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
@@ -757,7 +795,7 @@ $guiaInstalacion
                                               )
                                             else
                                               const Text(
-                                                "Web / Safari PWA",
+                                                "Apple / Safari PWA",
                                                 style: TextStyle(fontSize: 10, color: AgroTheme.colorTextSecondary, fontStyle: FontStyle.italic),
                                               ),
                                           ],
