@@ -1,11 +1,7 @@
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:share_plus/share_plus.dart';
-import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -21,7 +17,7 @@ class ServicioExportarOrdenPdf {
     final pdf = pw.Document();
     final db = await DatabaseHelper.instance.database;
 
-    // 💡 Carga del logo con fallback seguro si no existe en assets
+    // Carga de logo segura con fallback
     pw.MemoryImage? logoImage;
     try {
       final ByteData bytes = await rootBundle.load('logo/logo_anibal.png');
@@ -62,7 +58,6 @@ class ServicioExportarOrdenPdf {
 
       List<Map<String, dynamic>> resCatalogo = [];
 
-      // 1. Búsqueda por ID_Insumos si existe
       if (codProd != null && codProd.toString().isNotEmpty && codProd.toString() != '0') {
         resCatalogo = await db.query(
           'catalogo_insumos',
@@ -73,7 +68,6 @@ class ServicioExportarOrdenPdf {
         );
       }
 
-      // 2. Búsqueda por nombre de producto si no se encontró por ID
       if (resCatalogo.isEmpty && nombreProd.isNotEmpty) {
         resCatalogo = await db.query(
           'catalogo_insumos',
@@ -84,7 +78,6 @@ class ServicioExportarOrdenPdf {
         );
       }
 
-      // Si existe en el catálogo, asignamos los valores reales; sino, usamos los que traía el ítem
       if (resCatalogo.isNotEmpty) {
         final cat = resCatalogo.first;
         itemModificado['T_C'] = cat['T_C'] ?? item['T_C'] ?? item['tc'];
@@ -101,6 +94,22 @@ class ServicioExportarOrdenPdf {
 
       itemsEnriquecidos.add(itemModificado);
     }
+
+    // =========================================================================
+    // 💡 ACA ES LO NUEVO: CONSULTA DE PARÁMETROS TÉCNICOS (parametros_aplic)
+    // =========================================================================
+    Map<String, dynamic> parametros = {};
+    try {
+      final resParams = await db.query(
+        'parametros_aplic',
+        where: 'cod_orden = ?',
+        whereArgs: [codOrden],
+        limit: 1,
+      );
+      if (resParams.isNotEmpty) {
+        parametros = resParams.first;
+      }
+    } catch (_) {}
 
     pdf.addPage(
       pw.MultiPage(
@@ -202,7 +211,7 @@ class ServicioExportarOrdenPdf {
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text(
-                    "Powered by AgroSoft J&L Soluciones Integrales - jsosa190585@gmail.com - Chimpay, Río Negro",
+                    "Powered by AgroSoft J&L Soluciones Integrales - Chimpay, Río Negro",
                     style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
                   ),
                   pw.Text(
@@ -273,29 +282,28 @@ class ServicioExportarOrdenPdf {
               ],
             ),
           ),
-          pw.SizedBox(height: 16),
+          pw.SizedBox(height: 14),
 
           pw.Text("DETALLE DE LA RECETA Y DOSIFICACIÓN (MÁQUINA 2.000 LTS)",
               style: pw.TextStyle(
-                  fontSize: 10.5,
+                  fontSize: 10,
                   fontWeight: pw.FontWeight.bold,
                   color: const PdfColor.fromInt(0xFF1E6B4C))),
-          pw.SizedBox(height: 6),
+          pw.SizedBox(height: 5),
 
-          // 💡 Tabla con T_C (días) y TRI (horas) garantizados desde el catálogo
           pw.TableHelper.fromTextArray(
             border: pw.TableBorder.all(color: const PdfColor.fromInt(0xFFE5E7EB), width: 0.8),
             headerStyle: pw.TextStyle(
-                fontSize: 8.5,
+                fontSize: 8,
                 fontWeight: pw.FontWeight.bold,
                 color: PdfColors.white),
             headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1E6B4C)),
-            cellStyle: const pw.TextStyle(fontSize: 8.5, color: PdfColors.black),
+            cellStyle: const pw.TextStyle(fontSize: 8, color: PdfColors.black),
             cellAlignment: pw.Alignment.centerLeft,
-            cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+            cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4.5),
             headers: [
               '#',
-              'PRODUCTO / PRINCIPIO ACTIVO',
+              'PRODUCTO / INSUMO',
               'DOSIS / 100L',
               'DOSIS x MÁQ (2.000L)',
               'T.C.',
@@ -305,11 +313,15 @@ class ServicioExportarOrdenPdf {
               final idx = entry.key + 1;
               final item = entry.value;
 
-              final String tcValor = (item['T_C'] != null && item['T_C'].toString().isNotEmpty && item['T_C'].toString() != '0')
+              final String tcValor = (item['T_C'] != null &&
+                      item['T_C'].toString().isNotEmpty &&
+                      item['T_C'].toString() != '0')
                   ? "${item['T_C']} d"
                   : "S/D";
 
-              final String triValor = (item['TRI'] != null && item['TRI'].toString().isNotEmpty && item['TRI'].toString() != '0')
+              final String triValor = (item['TRI'] != null &&
+                      item['TRI'].toString().isNotEmpty &&
+                      item['TRI'].toString() != '0')
                   ? "${item['TRI']} hs"
                   : "S/D";
 
@@ -323,10 +335,47 @@ class ServicioExportarOrdenPdf {
               ];
             }).toList(),
           ),
-          pw.SizedBox(height: 14),
+          pw.SizedBox(height: 10),
+
+          // ===================================================================
+          // 💡 ACA ES LO NUEVO: CUADRO DE PARÁMETROS TÉCNICOS DE PULVERIZACIÓN
+          // ===================================================================
+          pw.Container(
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(
+              color: const PdfColor.fromInt(0xFFF9FAFB),
+              borderRadius: pw.BorderRadius.circular(6),
+              border: pw.Border.all(color: const PdfColor.fromInt(0xFFE5E7EB)),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  "PARÁMETROS TÉCNICOS Y CONDICIONES METEOROLÓGICAS DE APLICACIÓN",
+                  style: pw.TextStyle(
+                    fontSize: 7.5,
+                    fontWeight: pw.FontWeight.bold,
+                    color: const PdfColor.fromInt(0xFF134E32),
+                  ),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildParametroItem("Vel. Viento", parametros['vel_viento'] ?? '5-10 km/h'),
+                    _buildParametroItem("Temperatura", parametros['Temperatura'] ?? '18-22 °C'),
+                    _buildParametroItem("Tamaño Gota", parametros['Tamano_gota'] ?? '200-300 µm'),
+                    _buildParametroItem("Vel. Avance", parametros['Vel_Aplicacion'] ?? '5.5 km/h'),
+                    _buildParametroItem("Caudal Estimado", parametros['Caudal_Ha'] ?? '$volHa L/Ha'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 10),
 
           pw.Container(
-            padding: const pw.EdgeInsets.all(10),
+            padding: const pw.EdgeInsets.all(8),
             decoration: pw.BoxDecoration(
               color: const PdfColor.fromInt(0xFFFFFBEB),
               borderRadius: pw.BorderRadius.circular(6),
@@ -337,42 +386,43 @@ class ServicioExportarOrdenPdf {
               children: [
                 pw.Text("INDICACIONES GENERALES DE SEGURIDAD:",
                     style: pw.TextStyle(
-                        fontSize: 8.5,
+                        fontSize: 8,
                         fontWeight: pw.FontWeight.bold,
                         color: const PdfColor.fromInt(0xFF92400E))),
-                pw.SizedBox(height: 3),
+                pw.SizedBox(height: 2),
                 pw.Text(
                   "• Respetar estrictamente el Tiempo de Carencia (T.C.) y Tiempo de Reingreso (T.R.I.) antes de cosechar o ingresar al cuadro.\n"
                   "• Usar equipo de protección personal completo (máscara con filtro, mameluco impermeable, guantes de nitrilo).\n"
-                  "• Verificar condiciones meteorológicas: viento < 10 km/h y temperatura adecuada antes de comenzar la labor.",
-                  style: const pw.TextStyle(fontSize: 7.5, color: PdfColor.fromInt(0xFF78350F), lineSpacing: 1.5),
+                  "• Verificar condiciones meteorológicas: no aplicar con viento > 10 km/h ni con inversión térmica.",
+                  style: const pw.TextStyle(
+                      fontSize: 7, color: PdfColor.fromInt(0xFF78350F), lineSpacing: 1.3),
                 ),
               ],
             ),
           ),
-          pw.SizedBox(height: 36),
+          pw.SizedBox(height: 28),
 
           pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
             children: [
               pw.Column(
                 children: [
-                  pw.Container(width: 180, height: 1, color: PdfColors.black),
+                  pw.Container(width: 170, height: 1, color: PdfColors.black),
                   pw.SizedBox(height: 4),
                   pw.Text(responsable,
-                      style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
+                      style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                   pw.Text("RESPONSABLE TÉCNICO",
-                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
+                      style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
                 ],
               ),
               pw.Column(
                 children: [
-                  pw.Container(width: 180, height: 1, color: PdfColors.black),
+                  pw.Container(width: 170, height: 1, color: PdfColors.black),
                   pw.SizedBox(height: 4),
                   pw.Text("FIRMA DEL OPERARIO / APLICADOR",
-                      style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
+                      style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                   pw.Text("CONFORMIDAD DE LABOR",
-                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700)),
+                      style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
                 ],
               ),
             ],
@@ -381,29 +431,26 @@ class ServicioExportarOrdenPdf {
       ),
     );
 
-// 1. Guardar los bytes del documento
-final Uint8List bytes = await pdf.save();
-final String nombreArchivo = 'Orden_Aplicacion_$codOrden.pdf';
+    final Uint8List bytes = await pdf.save();
+    final String nombreArchivo = 'Orden_Aplicacion_$codOrden.pdf';
 
-if (kIsWeb) {
-  // 💡 Solución Web / Safari: Dispara la descarga o visor nativo sin tocar disco
-  await Printing.sharePdf(
-    bytes: bytes,
-    filename: nombreArchivo,
-  );
-} else {
-  // Móvil nativo (Android / iOS clásico): Se envía directamente en memoria con XFile.fromData
-  await Share.shareXFiles(
-    [
-      XFile.fromData(
-        bytes,
-        name: nombreArchivo,
-        mimeType: 'application/pdf',
-      ),
-    ],
-    text: 'Orden Técnica de Aplicación Foliar #$codOrden - $nombreProductor',
-  );
-}
+    if (kIsWeb) {
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: nombreArchivo,
+      );
+    } else {
+      await Share.shareXFiles(
+        [
+          XFile.fromData(
+            bytes,
+            name: nombreArchivo,
+            mimeType: 'application/pdf',
+          ),
+        ],
+        text: 'Orden Técnica de Aplicación Foliar #$codOrden - $nombreProductor',
+      );
+    }
   }
 
   static pw.Widget _buildInfoItem(String label, String valor) {
@@ -419,6 +466,23 @@ if (kIsWeb) {
         pw.Text(valor,
             style: pw.TextStyle(
                 fontSize: 8.5,
+                fontWeight: pw.FontWeight.bold,
+                color: const PdfColor.fromInt(0xFF1B231D))),
+      ],
+    );
+  }
+
+  static pw.Widget _buildParametroItem(String label, String valor) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(label,
+            style: const pw.TextStyle(
+                fontSize: 6.5,
+                color: PdfColors.grey600)),
+        pw.Text(valor,
+            style: pw.TextStyle(
+                fontSize: 7.5,
                 fontWeight: pw.FontWeight.bold,
                 color: const PdfColor.fromInt(0xFF1B231D))),
       ],

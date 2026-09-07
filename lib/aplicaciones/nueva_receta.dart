@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
@@ -10,7 +11,7 @@ import '../widgets/soft_button.dart';
 class NuevaRecetaScreen extends StatefulWidget {
   final int codProductor;
   final String nombreProductor;
-  final Map<String, dynamic>? ordenParaEditar; // 💡 Parámetro opcional para edición
+  final Map<String, dynamic>? ordenParaEditar;
 
   const NuevaRecetaScreen({
     super.key,
@@ -52,7 +53,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   List<String> _chacrasDisponibles = [];
   String? _chacraSeleccionada;
 
-  // 2. Cuadros e Inventario con Filtro por Cultivos
+  // 2. Cuadros e Inventario
   List<Map<String, dynamic>> _todosCuadrosInventario = [];
   Set<String> _cultivosEnChacra = {};
   final Set<String> _cultivosFiltroActivos = {};
@@ -62,12 +63,22 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   // 3. Catálogo de Insumos y Receta Foliar
   List<Map<String, dynamic>> _catalogoInsumos = [];
   String? _idProductoSeleccionado;
-  final TextEditingController _dosis100Controller = TextEditingController();
+  
+  // 💡 ACA ES LO NUEVO: Selector de tipo de dosis (100L o Por Ha)
+  String _modalidadDosis = "DOSIS_100"; // 'DOSIS_100' | 'DOSIS_HA'
+  final TextEditingController _dosisEntradaController = TextEditingController();
   final TextEditingController _dosisMaquinaController = TextEditingController();
   double _dosisMaquinaCalculada = 0.0;
   final double _capacidadMaquinaLitros = 2000.0;
 
   final List<Map<String, dynamic>> _itemsRecetaTemporal = [];
+
+  // 💡 ACA ES LO NUEVO: Parámetros Técnicos de Aplicación (parametros_aplic)
+  final TextEditingController _paramVientoCtrl = TextEditingController(text: "5-10 km/h");
+  final TextEditingController _paramTempCtrl = TextEditingController(text: "18-22 °C");
+  final TextEditingController _paramGotaCtrl = TextEditingController(text: "Media (200-300 µm)");
+  final TextEditingController _paramVelocidadCtrl = TextEditingController(text: "5.5 km/h");
+  final TextEditingController _paramCaudalCtrl = TextEditingController(text: "1000 L/Ha");
 
   @override
   void initState() {
@@ -81,8 +92,13 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     _motivoCustomController.dispose();
     _momentoController.dispose();
     _volumenHaController.dispose();
-    _dosis100Controller.dispose();
+    _dosisEntradaController.dispose();
     _dosisMaquinaController.dispose();
+    _paramVientoCtrl.dispose();
+    _paramTempCtrl.dispose();
+    _paramGotaCtrl.dispose();
+    _paramVelocidadCtrl.dispose();
+    _paramCaudalCtrl.dispose();
     super.dispose();
   }
 
@@ -105,6 +121,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _momentoController.text = ordenMap['momento']?.toString() ?? '';
       _volumenHaController.text =
           (ordenMap['vol_ha']?.toString() ?? '1000').replaceAll('.0', '');
+      _paramCaudalCtrl.text = "${_volumenHaController.text} L/Ha";
     } else {
       final resContador = await db.rawQuery(
         'SELECT COUNT(DISTINCT cod_orden) as total FROM recetas_aplicaciones WHERE cod_productor = ?',
@@ -118,7 +135,27 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           (anioActual * 10000 + nuevoCorrelativo);
     }
 
-    // 2. Tipos de Aplicación
+    // 2. Cargar parámetros técnicos existentes si es edición
+    if (_esEdicion) {
+      try {
+        final params = await db.query(
+          'parametros_aplic',
+          where: 'cod_orden = ?',
+          whereArgs: [_numeroOrden],
+          limit: 1,
+        );
+        if (params.isNotEmpty) {
+          final p = params.first;
+          _paramVientoCtrl.text = (p['vel_viento'] ?? '').toString();
+          _paramTempCtrl.text = (p['Temperatura'] ?? '').toString();
+          _paramGotaCtrl.text = (p['Tamano_gota'] ?? '').toString();
+          _paramVelocidadCtrl.text = (p['Vel_Aplicacion'] ?? '').toString();
+          _paramCaudalCtrl.text = (p['Caudal_Ha'] ?? '').toString();
+        }
+      } catch (_) {}
+    }
+
+    // 3. Tipos de Aplicación
     final resTipos = await db.rawQuery('''
       SELECT DISTINCT tipo_aplic 
       FROM motivos_aplicaciones 
@@ -131,7 +168,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       await _cargarMotivosPorTipo(_tipoAplicacionSeleccionado!);
     }
 
-    // Si es edición, pre-cargar el motivo
     if (_esEdicion) {
       final motivoExistente = widget.ordenParaEditar!['motivo']?.toString() ?? '';
       if (_motivosDisponibles.contains(motivoExistente)) {
@@ -144,7 +180,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       }
     }
 
-    // 3. Traer Chacras
+    // 4. Traer Chacras
     final resChacras = await db.rawQuery('''
       SELECT DISTINCT chacra 
       FROM inventario_plantacion 
@@ -164,7 +200,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           resChacrasCuadros.map((e) => e['chacra'].toString()).toList();
     }
 
-    // Pre-cargar chacra y cuadros
     if (_esEdicion) {
       final chacraOrden = widget.ordenParaEditar!['chacra']?.toString() ?? '';
       if (_chacrasDisponibles.contains(chacraOrden)) {
@@ -180,7 +215,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       await _cargarCuadrosDeInventario(_chacraSeleccionada!);
     }
 
-    // 💡 Pre-seleccionar los cuadros en edición
     if (_esEdicion) {
       final String cuadrosStr = widget.ordenParaEditar!['cuadros']?.toString() ?? '';
       final cuadrosGuardados = cuadrosStr
@@ -201,17 +235,10 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _superficieTotalSeleccionada = supAcum;
     }
 
-    // 4. Catálogo de productos
-    _catalogoInsumos = await db.rawQuery('''
-      SELECT * FROM catalogo_insumos 
-      WHERE rubro IN (
-        SELECT nombre FROM rubros_insumos WHERE macro_rubro = 'PRODUCTOS'
-      )
-      AND (Mostrar = 1 OR Mostrar IS NULL)
-      ORDER BY Descripcion1 ASC
-    ''');
+    // 5. Cargar Catálogo de Insumos
+    await _recargarCatalogoInsumos();
 
-    // 💡 Pre-cargar productos de la receta en edición
+    // 6. Pre-cargar productos si es edición
     if (_esEdicion) {
       final itemsRaw = widget.ordenParaEditar!['items'];
       if (itemsRaw is List) {
@@ -224,6 +251,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
             'rubro': it['rubro'] ?? 'General',
             'dosis_100': it['dosis_100']?.toString() ?? '0',
             'dosis_maq': dMaq,
+            'modalidad_dosis': it['modalidad_dosis'] ?? 'DOSIS_100',
             'tc': it['tc'] ?? 0,
             'ti': it['ti'] ?? 0,
             'orden_aplic': it['orden_aplic'] ?? (_itemsRecetaTemporal.length + 1),
@@ -234,6 +262,21 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
     if (!mounted) return;
     setState(() => _cargando = false);
+  }
+
+  Future<void> _recargarCatalogoInsumos() async {
+    final db = await DatabaseHelper.instance.database;
+    final res = await db.rawQuery('''
+      SELECT * FROM catalogo_insumos 
+      WHERE rubro IN (
+        SELECT nombre FROM rubros_insumos WHERE macro_rubro = 'PRODUCTOS'
+      )
+      AND (Mostrar = 1 OR Mostrar IS NULL)
+      ORDER BY Descripcion1 ASC
+    ''');
+    setState(() {
+      _catalogoInsumos = res;
+    });
   }
 
   Future<void> _cargarMotivosPorTipo(String tipo) async {
@@ -338,13 +381,188 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     });
   }
 
-  void _calcularDosisMaquina(String valor100) {
-    final double d100 = double.tryParse(valor100.replaceAll(',', '.').trim()) ?? 0.0;
-    final double factorVolumen = _capacidadMaquinaLitros / 1000.0;
+  // 💡 Cálculo dinámico de dosis por máquina según la modalidad elegida
+  void _calcularDosisMaquina(String valorEntrada) {
+    final double valor = double.tryParse(valorEntrada.replaceAll(',', '.').trim()) ?? 0.0;
+    final double volCaldoHa = double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+
     setState(() {
-      _dosisMaquinaCalculada = d100 * factorVolumen;
+      if (_modalidadDosis == "DOSIS_100") {
+        // Modo Concentración: Valor cada 100 L. Para máquina de 2000L = valor * 20
+        final double factor = _capacidadMaquinaLitros / 100.0;
+        _dosisMaquinaCalculada = valor * factor;
+      } else {
+        // Modo Superficie (Por Ha): Dosis Ha / (Vol Ha / Capacidad Maq)
+        if (volCaldoHa > 0) {
+          final double hectareasPorMaquina = _capacidadMaquinaLitros / volCaldoHa;
+          _dosisMaquinaCalculada = valor * hectareasPorMaquina;
+        } else {
+          _dosisMaquinaCalculada = 0.0;
+        }
+      }
       _dosisMaquinaController.text = _dosisMaquinaCalculada.toStringAsFixed(2);
     });
+  }
+
+  // 💡 Modal rápido para que el ingeniero agregue insumos al catálogo
+  void _mostrarModalNuevoInsumoCatalogo() {
+    final fKey = GlobalKey<FormState>();
+    final nombreCtrl = TextEditingController();
+    final activoCtrl = TextEditingController();
+    final concentracionCtrl = TextEditingController();
+    final tcCtrl = TextEditingController(text: "7");
+    final tiCtrl = TextEditingController(text: "24");
+    String rubroSel = "AGROQUIMICOS";
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          height: MediaQuery.of(ctx).size.height * 0.85,
+          decoration: const BoxDecoration(
+            color: AgroTheme.colorSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: EdgeInsets.only(
+            top: 20,
+            left: 20,
+            right: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Form(
+            key: fKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      "Nuevo Insumo al Catálogo",
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AgroTheme.colorText),
+                    ),
+                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
+                  ],
+                ),
+                const Divider(color: AgroTheme.colorBorder),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: [
+                        TextFormField(
+                          controller: nombreCtrl,
+                          decoration: _inputDecoration("Nombre Comercial del Producto (Ej: Coragen)"),
+                          validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          value: rubroSel,
+                          decoration: _inputDecoration("Rubro / Clasificación"),
+                          items: const [
+                            DropdownMenuItem(value: "AGROQUIMICOS", child: Text("Agroquímico (Insecticida / Fungicida)")),
+                            DropdownMenuItem(value: "FERTILIZANTES", child: Text("Fertilizante Foliar")),
+                            DropdownMenuItem(value: "HERBICIDAS", child: Text("Herbicida")),
+                            DropdownMenuItem(value: "COADYUVANTES", child: Text("Coadyuvante / Aceite")),
+                          ],
+                          onChanged: (v) => rubroSel = v ?? "AGROQUIMICOS",
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: activoCtrl,
+                          decoration: _inputDecoration("Principio Activo (Ej: Clorantraniliprole)"),
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: concentracionCtrl,
+                          decoration: _inputDecoration("Concentración (Ej: 20% SC)"),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: tcCtrl,
+                                keyboardType: TextInputType.number,
+                                decoration: _inputDecoration("Tiempo Carencia (Días)"),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextFormField(
+                                controller: tiCtrl,
+                                keyboardType: TextInputType.number,
+                                decoration: _inputDecoration("Tiempo Reingreso (Horas)"),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: SoftButton(
+                    onTap: () async {
+                      if (!fKey.currentState!.validate()) return;
+                      final db = await DatabaseHelper.instance.database;
+
+                      final int sigId = await DatabaseHelper.instance
+                          .obtenerSiguienteId('catalogo_insumos', 'ID_Insumos');
+
+                      final rowNuevo = {
+                        'ID_Insumos': sigId,
+                        'rubro': rubroSel,
+                        'Descripcion1': nombreCtrl.text.trim(),
+                        'Descripcion2': activoCtrl.text.trim(),
+                        'principio_activo': activoCtrl.text.trim(),
+                        'Concentracion': concentracionCtrl.text.trim(),
+                        'T_C': int.tryParse(tcCtrl.text.trim()) ?? 0,
+                        'TRI': int.tryParse(tiCtrl.text.trim()) ?? 0,
+                        'Mostrar': 1,
+                        'stock_real': 0,
+                      };
+
+                      await db.insert('catalogo_insumos', rowNuevo);
+                      try {
+                        await Supabase.instance.client.from('catalogo_insumos').insert(rowNuevo);
+                      } catch (_) {}
+
+                      await _recargarCatalogoInsumos();
+
+                      if (mounted) {
+                        setState(() {
+                          _idProductoSeleccionado = sigId.toString();
+                        });
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(backgroundColor: AgroTheme.colorAccent, content: Text('Insumo agregado al catálogo')),
+                        );
+                      }
+                    },
+                    child: const Center(
+                      child: Text("Guardar Insumo", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _agregarProductoATabla() {
@@ -355,7 +573,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
     Map<String, dynamic> prodMap = {};
     for (var p in _catalogoInsumos) {
-      final String idActual = (p['cod_producto'] ?? p['id'] ?? p['Descripcion1'] ?? '')
+      final String idActual = (p['cod_producto'] ?? p['ID_Insumos'] ?? p['id'] ?? p['Descripcion1'] ?? '')
           .toString()
           .trim();
       if (idActual == _idProductoSeleccionado!.trim()) {
@@ -369,33 +587,44 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       return;
     }
 
-    final clean100 = _dosis100Controller.text.trim().replaceAll(',', '.');
-    final double dosis100Num = double.tryParse(clean100) ?? 0.0;
+    final cleanEntrada = _dosisEntradaController.text.trim().replaceAll(',', '.');
+    final double dosisEntradaNum = double.tryParse(cleanEntrada) ?? 0.0;
 
-    if (dosis100Num <= 0) {
-      _mostrarAlerta('Ingresa una dosis cada 100 L mayor a 0.');
+    if (dosisEntradaNum <= 0) {
+      _mostrarAlerta('Ingresa una dosis válida mayor a 0.');
       return;
     }
 
-    final double factorVolumen = _capacidadMaquinaLitros / 1000.0;
+    final double volCaldoHa = double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+    double dosis100Final = 0.0;
+
+    if (_modalidadDosis == "DOSIS_100") {
+      dosis100Final = dosisEntradaNum;
+    } else {
+      // Si ingresó Dosis/Ha, calculamos su equivalente cada 100L para los cálculos de caldo
+      dosis100Final = volCaldoHa > 0 ? (dosisEntradaNum / (volCaldoHa / 100.0)) : dosisEntradaNum;
+    }
+
     final double dosisMaqNum = double.tryParse(
             _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
-        (dosis100Num * factorVolumen);
+        _dosisMaquinaCalculada;
 
     setState(() {
       _itemsRecetaTemporal.add({
-        'cod_producto': prodMap['cod_producto'] ?? prodMap['id'] ?? 0,
+        'cod_producto': prodMap['cod_producto'] ?? prodMap['ID_Insumos'] ?? prodMap['id'] ?? 0,
         'producto': prodMap['Descripcion1'] ?? prodMap['descripcion'] ?? 'Insumo',
         'rubro': prodMap['rubro'] ?? 'General',
-        'dosis_100': clean100,
+        'dosis_100': dosis100Final.toStringAsFixed(2),
+        'dosis_entrada': cleanEntrada,
+        'modalidad_dosis': _modalidadDosis,
         'dosis_maq': dosisMaqNum,
-        'tc': prodMap['tc'] ?? 0,
-        'ti': prodMap['ti'] ?? 0,
+        'tc': prodMap['T_C'] ?? prodMap['tc'] ?? 0,
+        'ti': prodMap['TRI'] ?? prodMap['ti'] ?? 0,
         'orden_aplic': _itemsRecetaTemporal.length + 1,
       });
 
       _idProductoSeleccionado = null;
-      _dosis100Controller.clear();
+      _dosisEntradaController.clear();
       _dosisMaquinaController.clear();
       _dosisMaquinaCalculada = 0.0;
     });
@@ -454,12 +683,17 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ??
               1000.0;
 
-      // 💡 Si es edición, eliminamos las líneas previas para guardar la versión actualizada
+      // 1. Limpiar versiones previas si es edición
       if (_esEdicion) {
         await db.delete(
           'recetas_aplicaciones',
           where: 'cod_orden = ? AND cod_productor = ?',
           whereArgs: [_numeroOrden, widget.codProductor],
+        );
+        await db.delete(
+          'parametros_aplic',
+          where: 'cod_orden = ?',
+          whereArgs: [_numeroOrden],
         );
       }
 
@@ -468,11 +702,12 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
       Batch batch = db.batch();
 
+      // 2. Insertar líneas de receta foliar
       for (int i = 0; i < _itemsRecetaTemporal.length; i++) {
         final item = _itemsRecetaTemporal[i];
         final int idActual = siguienteRecetaId + i;
 
-        batch.insert('recetas_aplicaciones', {
+        final rowReceta = {
           'cod_receta': idActual,
           'cod_orden': _numeroOrden,
           'cod_productor': widget.codProductor,
@@ -490,14 +725,44 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           'producto': item['producto'],
           'dosis_100': item['dosis_100'],
           'dosis_maq': item['dosis_maq'],
-          'tc': item['tc'],
-          'ti': item['ti'],
+          'tc': item['tc'].toString(),
+          'ti': item['ti'].toString(),
           'habilitado': _esEdicion
               ? (widget.ordenParaEditar!['estado'] ?? 'ACTIVO')
               : 'ACTIVO',
           'sincronizado': 0,
-        });
+        };
+
+        batch.insert('recetas_aplicaciones', rowReceta);
+
+        // Upsert en Supabase en segundo plano
+        Supabase.instance.client.from('recetas_aplicaciones').upsert(rowReceta).catchError((_) {});
       }
+
+      // 3. 💡 Guardar parámetros técnicos de aplicación (parametros_aplic)
+      final rowParametros = {
+        'cod_orden': _numeroOrden,
+        'vel_viento': _paramVientoCtrl.text.trim(),
+        'Temperatura': _paramTempCtrl.text.trim(),
+        'Tamano_gota': _paramGotaCtrl.text.trim(),
+        'Vel_Aplicacion': _paramVelocidadCtrl.text.trim(),
+        'Caudal_Ha': _paramCaudalCtrl.text.trim(),
+      };
+
+      batch.insert(
+        'parametros_aplic',
+        rowParametros,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      // Sincronizar parámetros con Supabase
+      Supabase.instance.client.from('parametros_aplic').insert({
+        'vel_viento': rowParametros['vel_viento'],
+        'Temperatura': rowParametros['Temperatura'],
+        'Tamano_gota': rowParametros['Tamano_gota'],
+        'Vel_Aplicacion': rowParametros['Vel_Aplicacion'],
+        'Caudal_Ha': rowParametros['Caudal_Ha'],
+      }).catchError((_) {});
 
       await batch.commit(noResult: true);
 
@@ -566,6 +831,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // SECCIÓN 1: CABECERA
                       _buildSeccionHeader("1. Datos de Cabecera", Icons.event_note_rounded),
                       const SizedBox(height: 12),
                       Container(
@@ -666,6 +932,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                     decoration: _inputDecoration("Volumen Caldo (L/Ha)"),
                                     validator: (val) =>
                                         val == null || val.isEmpty ? "Obligatorio" : null,
+                                    onChanged: (v) {
+                                      setState(() {
+                                        _paramCaudalCtrl.text = "$v L/Ha";
+                                        if (_dosisEntradaController.text.isNotEmpty) {
+                                          _calcularDosisMaquina(_dosisEntradaController.text);
+                                        }
+                                      });
+                                    },
                                   ),
                                 ),
                               ],
@@ -674,6 +948,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         ),
                       ),
                       const SizedBox(height: 24),
+
+                      // SECCIÓN 2: CUADROS Y CHACRA
                       _buildSeccionHeader("2. Ubicación y Cuadros", Icons.map_outlined),
                       const SizedBox(height: 12),
                       Container(
@@ -809,45 +1085,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 ),
                               )
                             else ...[
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: AgroTheme.colorBg,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: const Row(
-                                  children: [
-                                    SizedBox(width: 32),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text("CUADRO",
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: AgroTheme.colorTextSecondary)),
-                                    ),
-                                    Expanded(
-                                      flex: 2,
-                                      child: Text("SUP (HA)",
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: AgroTheme.colorTextSecondary)),
-                                    ),
-                                    Expanded(
-                                      flex: 3,
-                                      child: Text("VARIEDAD / CULTIVO",
-                                          textAlign: TextAlign.right,
-                                          style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: AgroTheme.colorTextSecondary)),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 6),
                               ListView.separated(
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
@@ -956,6 +1193,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         ),
                       ),
                       const SizedBox(height: 24),
+
+                      // SECCIÓN 3: RECETA FOLIAR + SELECTOR TIPO APLIC + BOTÓN NUEVO INSUMO
                       _buildSeccionHeader("3. Confección de Receta Foliar", Icons.science_outlined),
                       const SizedBox(height: 12),
                       Container(
@@ -964,36 +1203,127 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Builder(
-                              builder: (context) {
-                                final Map<String, Map<String, dynamic>> insumosUnicos = {};
-                                for (var prod in _catalogoInsumos) {
-                                  final String id = (prod['cod_producto'] ?? prod['id'] ?? prod['Descripcion1'] ?? '')
-                                      .toString()
-                                      .trim();
-                                  if (id.isNotEmpty && !insumosUnicos.containsKey(id)) {
-                                    insumosUnicos[id] = prod;
-                                  }
-                                }
-
-                                final bool existeSeleccionado = _idProductoSeleccionado != null &&
-                                    insumosUnicos.containsKey(_idProductoSeleccionado);
-                                final String? valorSeguro = existeSeleccionado ? _idProductoSeleccionado : null;
-
-                                return DropdownButtonFormField<String>(
-                                  value: valorSeguro,
-                                  isExpanded: true,
-                                  decoration: _inputDecoration("Buscar Insumo / Principio Activo"),
-                                  hint: Text(
-                                    insumosUnicos.isEmpty
-                                        ? "Cargando catálogo de insumos..."
-                                        : "Selecciona un insumo...",
-                                    style: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+                            // 💡 Selector Tipo Aplic: Dosis / 100 L vs Dosis / Ha
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  "Modalidad de Dosificación:",
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AgroTheme.colorTextSecondary,
                                   ),
-                                  items: insumosUnicos.isEmpty
-                                      ? null
-                                      : insumosUnicos.values.map((prod) {
-                                          final String idProd = (prod['cod_producto'] ?? prod['id'] ?? prod['Descripcion1'])
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: BoxDecoration(
+                                    color: AgroTheme.colorBg,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: AgroTheme.colorBorder),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      InkWell(
+                                        onTap: () {
+                                          setState(() {
+                                            _modalidadDosis = "DOSIS_100";
+                                            if (_dosisEntradaController.text.isNotEmpty) {
+                                              _calcularDosisMaquina(_dosisEntradaController.text);
+                                            }
+                                          });
+                                        },
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: _modalidadDosis == "DOSIS_100"
+                                                ? AgroTheme.colorAccentDark
+                                                : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            "Dosis / 100 L",
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                              color: _modalidadDosis == "DOSIS_100"
+                                                  ? Colors.white
+                                                  : AgroTheme.colorTextSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      InkWell(
+                                        onTap: () {
+                                          setState(() {
+                                            _modalidadDosis = "DOSIS_HA";
+                                            if (_dosisEntradaController.text.isNotEmpty) {
+                                              _calcularDosisMaquina(_dosisEntradaController.text);
+                                            }
+                                          });
+                                        },
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: _modalidadDosis == "DOSIS_HA"
+                                                ? AgroTheme.colorGold
+                                                : Colors.transparent,
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            "Dosis / Ha",
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                              color: _modalidadDosis == "DOSIS_HA"
+                                                  ? Colors.white
+                                                  : AgroTheme.colorTextSecondary,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+
+                            // Fila: Buscador de Insumos + Botón "+" para nuevo insumo en catálogo
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Builder(
+                                    builder: (context) {
+                                      final Map<String, Map<String, dynamic>> insumosUnicos = {};
+                                      for (var prod in _catalogoInsumos) {
+                                        final String id = (prod['cod_producto'] ?? prod['ID_Insumos'] ?? prod['id'] ?? prod['Descripcion1'] ?? '')
+                                            .toString()
+                                            .trim();
+                                        if (id.isNotEmpty && !insumosUnicos.containsKey(id)) {
+                                          insumosUnicos[id] = prod;
+                                        }
+                                      }
+
+                                      final bool existeSeleccionado = _idProductoSeleccionado != null &&
+                                          insumosUnicos.containsKey(_idProductoSeleccionado);
+                                      final String? valorSeguro = existeSeleccionado ? _idProductoSeleccionado : null;
+
+                                      return DropdownButtonFormField<String>(
+                                        value: valorSeguro,
+                                        isExpanded: true,
+                                        decoration: _inputDecoration("Buscar Insumo / Principio Activo"),
+                                        hint: Text(
+                                          insumosUnicos.isEmpty
+                                              ? "Cargando catálogo..."
+                                              : "Selecciona un insumo...",
+                                          style: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+                                        ),
+                                        items: insumosUnicos.values.map((prod) {
+                                          final String idProd = (prod['cod_producto'] ?? prod['ID_Insumos'] ?? prod['id'] ?? prod['Descripcion1'])
                                               .toString()
                                               .trim();
                                           final String nombre = prod['Descripcion1'] ?? prod['descripcion'] ?? 'Insumo';
@@ -1008,27 +1338,50 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                             ),
                                           );
                                         }).toList(),
-                                  onChanged: insumosUnicos.isEmpty
-                                      ? null
-                                      : (val) {
-                                          setState(() {
-                                            _idProductoSeleccionado = val;
-                                          });
-                                        },
-                                );
-                              },
+                                        onChanged: insumosUnicos.isEmpty
+                                            ? null
+                                            : (val) {
+                                                setState(() {
+                                                  _idProductoSeleccionado = val;
+                                                });
+                                              },
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                // 💡 Botón mini "+" para agregar productos al catálogo
+                                Container(
+                                  height: 48,
+                                  width: 48,
+                                  decoration: BoxDecoration(
+                                    color: AgroTheme.colorAccentDark,
+                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                  ),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
+                                    tooltip: "Dar de alta nuevo insumo en catálogo",
+                                    onPressed: _mostrarModalNuevoInsumoCatalogo,
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 14),
+
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(
                                   flex: 5,
                                   child: TextFormField(
-                                    controller: _dosis100Controller,
+                                    controller: _dosisEntradaController,
                                     keyboardType:
                                         const TextInputType.numberWithOptions(decimal: true),
-                                    decoration: _inputDecoration("Dosis / 100 L (cc o g)"),
+                                    decoration: _inputDecoration(
+                                      _modalidadDosis == "DOSIS_100"
+                                          ? "Dosis / 100 L (cc o g)"
+                                          : "Dosis / Ha (Lts o Kg)",
+                                    ),
                                     style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
                                     onChanged: _calcularDosisMaquina,
                                   ),
@@ -1099,28 +1452,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               const SizedBox(height: 18),
                               const Divider(color: AgroTheme.colorBorder),
                               const SizedBox(height: 8),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    "Caldo Foliar Compuesto:",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 13,
-                                      color: AgroTheme.colorText,
-                                    ),
-                                  ),
-                                  Text(
-                                    "${_itemsRecetaTemporal.length} productos agregados",
-                                    style: const TextStyle(
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.w600,
-                                      color: AgroTheme.colorTextSecondary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
                               ListView.separated(
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
@@ -1128,6 +1459,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 separatorBuilder: (_, __) => const SizedBox(height: 6),
                                 itemBuilder: (context, idx) {
                                   final item = _itemsRecetaTemporal[idx];
+                                  final bool esHa = item['modalidad_dosis'] == "DOSIS_HA";
+
                                   return Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                                     decoration: BoxDecoration(
@@ -1165,7 +1498,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                               ),
                                               const SizedBox(height: 2),
                                               Text(
-                                                "Dosis 100L: ${item['dosis_100']}  ·  Máq: ${item['dosis_maq']} L/Kg",
+                                                esHa
+                                                    ? "Dosis Ha: ${item['dosis_entrada']} L/Kg  ·  Máq (2000L): ${item['dosis_maq']} L/Kg"
+                                                    : "Dosis 100L: ${item['dosis_100']}  ·  Máq (2000L): ${item['dosis_maq']} L/Kg",
                                                 style: const TextStyle(
                                                   fontSize: 11.5,
                                                   color: AgroTheme.colorTextSecondary,
@@ -1179,7 +1514,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                           icon: const Icon(Icons.delete_outline_rounded,
                                               size: 20, color: AgroTheme.colorDanger),
                                           onPressed: () => _eliminarProductoDeReceta(idx),
-                                          tooltip: "Quitar de la receta",
                                         ),
                                       ],
                                     ),
@@ -1190,7 +1524,62 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 24),
+
+                      // 💡 SECCIÓN 4: PARÁMETROS TÉCNICOS DE APLICACIÓN (parametros_aplic)
+                      _buildSeccionHeader("4. Parámetros Técnicos de Pulverización", Icons.speed_rounded),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: _boxDecorationSoft(),
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _paramVientoCtrl,
+                                    decoration: _inputDecoration("Vel. Viento (ej: 5-8 km/h)"),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _paramTempCtrl,
+                                    decoration: _inputDecoration("Temperatura (ej: 19 °C)"),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _paramGotaCtrl,
+                                    decoration: _inputDecoration("Tamaño Gota (ej: 250 µm)"),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: _paramVelocidadCtrl,
+                                    decoration: _inputDecoration("Vel. Avance (ej: 5.5 km/h)"),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _paramCaudalCtrl,
+                              decoration: _inputDecoration("Caudal por Hectárea (ej: 1000 L/Ha)"),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 28),
+
+                      // BOTÓN FINAL GUARDAR
                       SizedBox(
                         width: double.infinity,
                         height: 54,

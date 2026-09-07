@@ -42,6 +42,7 @@ class ServicioBajar {
       {'nombre': 'fenologia_parametros', 'pk': 'id'},
       {'nombre': 'lecturas_fenologia', 'pk': 'id'},
       {'nombre': 'lecturas_trampas', 'pk': 'id'},
+      {'nombre': 'parametros_aplic', 'pk': 'id'},
     ];
 
     for (final t in tablas) {

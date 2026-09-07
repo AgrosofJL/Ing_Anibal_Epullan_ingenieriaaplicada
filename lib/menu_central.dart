@@ -73,14 +73,28 @@ class _MenuCentralState extends State<MenuCentral>
     await _cargarProductores();
   }
 
+  // 💡 ESTO LO MODIFIQUE: Filtro de permisos estricto según rol de usuario
   Future<void> _cargarProductores() async {
     final db = await DatabaseHelper.instance.database;
-    final List<Map<String, dynamic>> prods = await db.query(
-      'productores',
-      where: 'estado = ?',
-      whereArgs: ['ACTIVO'],
-      orderBy: 'productor ASC',
-    );
+    List<Map<String, dynamic>> prods = [];
+
+    if (_esIngenieroOAdmin) {
+      // Ingeniero / Admin global ve todos los productores habilitados
+      prods = await db.query(
+        'productores',
+        where: 'estado = ?',
+        whereArgs: ['ACTIVO'],
+        orderBy: 'productor ASC',
+      );
+    } else {
+      // Productor local / Operario solo consulta su propio establecimiento
+      prods = await db.query(
+        'productores',
+        where: 'cod_productor = ? AND estado = ?',
+        whereArgs: [_userCodProductor, 'ACTIVO'],
+        limit: 1,
+      );
+    }
 
     if (!mounted) return;
 
@@ -89,33 +103,43 @@ class _MenuCentralState extends State<MenuCentral>
 
       if (_esIngenieroOAdmin) {
         if (_listaProductores.isNotEmpty) {
-          _selectedCodProductor ??=
-              _listaProductores.first['cod_productor'] as int;
+          if (_selectedCodProductor == null ||
+              !_listaProductores.any((p) => p['cod_productor'] == _selectedCodProductor)) {
+            _selectedCodProductor = _listaProductores.first['cod_productor'] as int;
+          }
           _productorActivo = _listaProductores.firstWhere(
             (p) => p['cod_productor'] == _selectedCodProductor,
             orElse: () => _listaProductores.first,
           );
+        } else {
+          _productorActivo = null;
+          _selectedCodProductor = null;
         }
       } else {
+        // Asignación cerrada para cuentas de campo
         _selectedCodProductor = _userCodProductor;
-        _productorActivo = _listaProductores.firstWhere(
-          (p) => p['cod_productor'] == _userCodProductor,
-          orElse: () => {
+        if (_listaProductores.isNotEmpty) {
+          _productorActivo = _listaProductores.first;
+        } else {
+          _productorActivo = {
+            'cod_productor': _userCodProductor,
             'productor': 'Establecimiento Propio',
             'cuit': 'S/D',
+            'renspa': 'S/D',
             'localidad': 'Campo',
-          },
-        );
+          };
+        }
       }
     });
   }
 
   void _cambiarProductor(int? nuevoCod) {
-    if (nuevoCod == null) return;
+    if (nuevoCod == null || !_esIngenieroOAdmin) return;
     setState(() {
       _selectedCodProductor = nuevoCod;
       _productorActivo = _listaProductores.firstWhere(
         (p) => p['cod_productor'] == nuevoCod,
+        orElse: () => _listaProductores.first,
       );
     });
   }
@@ -143,7 +167,7 @@ class _MenuCentralState extends State<MenuCentral>
 
   int get _codProductorActivo =>
       _selectedCodProductor ??
-      (_productorActivo?['cod_productor'] as int? ?? 1);
+      (_productorActivo?['cod_productor'] as int? ?? _userCodProductor);
 
   String get _nombreProductorActivo =>
       _productorActivo?['productor'] ?? 'Establecimiento Propio';
@@ -329,7 +353,6 @@ class _MenuCentralState extends State<MenuCentral>
                     ),
                     const SizedBox(height: 16),
 
-                    // Grid Limpio con 4 módulos principales + Gestión si aplica
                     GridView.count(
                       crossAxisCount:
                           MediaQuery.of(context).size.width > 600 ? 2 : 1,
@@ -350,7 +373,11 @@ class _MenuCentralState extends State<MenuCentral>
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const AplicaProductorScreen()),
+                                builder: (_) => AplicaProductorScreen(
+                                  codProductor: _codProductorActivo,
+                                  nombreProductor: _nombreProductorActivo,
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -382,12 +409,11 @@ class _MenuCentralState extends State<MenuCentral>
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) =>
-                                      const CatalogoInsumosScreen()),
+                                builder: (_) => const CatalogoInsumosScreen(),
+                              ),
                             );
                           },
                         ),
-                        // 💡 ACA ES LO NUEVO: Centro Unificado de Reportería
                         ModuloCardItem(
                           titulo: "Reportería",
                           descripcion:
@@ -417,7 +443,8 @@ class _MenuCentralState extends State<MenuCentral>
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => const ProductoresScreen()),
+                                  builder: (_) => const ProductoresScreen(),
+                                ),
                               );
                             },
                           ),
@@ -445,8 +472,9 @@ class _MenuCentralState extends State<MenuCentral>
     );
   }
 
+  // 💡 Tarjeta de productor con selector visible exclusivamente si es Ingeniero o Administrador
   Widget _buildTarjetaProductorProfesional() {
-    final String nombre = _productorActivo?['productor'] ?? 'Sin Productor';
+    final String nombre = _productorActivo?['productor'] ?? 'Sin Productor Asignado';
     final String cuit = _productorActivo?['cuit'] ?? 'S/D';
     final String renspa = _productorActivo?['renspa'] ?? 'S/D';
     final String localidad =
@@ -458,11 +486,11 @@ class _MenuCentralState extends State<MenuCentral>
         color: AgroTheme.colorSurface,
         borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
         border: Border.all(color: AgroTheme.colorBorder),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: const Color(0x06141E18),
+            color: Color(0x06141E18),
             blurRadius: 12,
-            offset: const Offset(0, 4),
+            offset: Offset(0, 4),
           )
         ],
       ),
@@ -540,6 +568,7 @@ class _MenuCentralState extends State<MenuCentral>
           ),
           const SizedBox(height: 12),
 
+          // 💡 Dropdown visible únicamente para rol INGENIERO / ADMIN con más de 1 productor
           if (_esIngenieroOAdmin && _listaProductores.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
@@ -685,11 +714,11 @@ class _ModuloCardItemState extends State<ModuloCardItem> {
                     offset: const Offset(0, 2),
                   ),
                 ]
-              : [
+              : const [
                   BoxShadow(
-                    color: const Color(0x08141E18),
+                    color: Color(0x08141E18),
                     blurRadius: 12,
-                    offset: const Offset(0, 4),
+                    offset: Offset(0, 4),
                   ),
                 ],
         ),

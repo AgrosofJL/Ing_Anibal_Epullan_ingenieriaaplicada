@@ -7,7 +7,7 @@ import '../widgets/soft_button.dart';
 import 'ordenes_generadas.dart';
 
 class AplicaProductorScreen extends StatefulWidget {
-  const AplicaProductorScreen({super.key});
+  const AplicaProductorScreen({super.key, required int codProductor, required String nombreProductor});
 
   @override
   State<AplicaProductorScreen> createState() => _AplicaProductorScreenState();
