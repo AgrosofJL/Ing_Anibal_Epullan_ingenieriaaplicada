@@ -233,16 +233,18 @@ class DatabaseHelper {
       )
     ''');
 
-    await db.execute(''' CREATE TABLE IF NOT EXISTS parametros_aplic (
-     id INTEGER PRIMARY KEY AUTOINCREMENT,
-     cod_orden INTEGER,
-     vel_viento TEXT,
-     Temperatura TEXT,
-     Tamano_gota TEXT,
-     Vel_Aplicacion TEXT,
-     Caudal_Ha TEXT
-          )
-    ''');
+    await db.execute('''
+  CREATE TABLE IF NOT EXISTS parametros_aplic (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cod_orden INTEGER,
+    cod_receta INTEGER,
+    vel_viento TEXT,
+    Temperatura TEXT,
+    Tamano_gota TEXT,
+    Vel_Aplicacion TEXT,
+    Caudal_Ha TEXT
+  )
+''');
 
     await db.execute('''
       CREATE TABLE IF NOT EXISTS lecturas_trampas (

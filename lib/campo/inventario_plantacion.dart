@@ -103,12 +103,12 @@ class _InventarioPlantacionScreenState
 
   Future<void> _inicializar() async {
     final prefs = await SharedPreferences.getInstance();
-    _userRole = (prefs.getString('userRole') ?? "OPERARIO").toUpperCase();
+    _userRole = (prefs.getString('userRole') ?? "OPERARIO").toUpperCase().trim();
     _userCodProductor = prefs.getInt('userCodProductor') ?? 0;
 
     final db = await DatabaseHelper.instance.database;
 
-    if (_esIngenieroOAdmin) {
+    if (_esIngenieroOAdminGlobal) {
       final prods = await db.query(
         'productores',
         where: 'estado = ?',
@@ -137,11 +137,14 @@ class _InventarioPlantacionScreenState
     await _cargarDatosCompletos();
   }
 
-  bool get _esIngenieroOAdmin =>
-      _userRole == 'INGENIERO' || _userRole == 'ADMIN';
+  // 💡 ESTO LO MODIFIQUE: Detección flexible de roles (ADMIN, ADM, PROD-ADM, PROD-ADMIN)
+  bool get _esIngenieroOAdminGlobal =>
+      _userRole == 'INGENIERO' || _userRole == 'ADMIN' || _userRole == 'ADM';
 
   bool get _puedeEditar =>
-      _esIngenieroOAdmin || _userRole == 'PROD-ADMIN';
+      _esIngenieroOAdminGlobal ||
+      _userRole.contains('ADM') ||
+      _userRole.contains('ADMIN');
 
   Future<void> _cargarDatosCompletos() async {
     if (_selectedCodProductor == null) return;
@@ -1229,7 +1232,7 @@ class _InventarioPlantacionScreenState
       body: SafeArea(
         child: Column(
           children: [
-            if (_esIngenieroOAdmin && _productores.isNotEmpty)
+            if (_esIngenieroOAdminGlobal && _productores.isNotEmpty)
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -1414,7 +1417,7 @@ class _InventarioPlantacionScreenState
                                 ),
                                 const SizedBox(height: 8),
                                 const Text(
-                                  "Tu establecimiento no cuenta aún con cuarteles cargados.\nPodes registrar tu primer cuadro y cuartel de plantación ahora mismo.",
+                                  "Tu establecimiento no cuenta aún con cuarteles cargados.\nPodes registrar tu primer cuadro o tu plantación ahora mismo.",
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                       fontSize: 13,
@@ -1422,33 +1425,63 @@ class _InventarioPlantacionScreenState
                                       height: 1.4),
                                 ),
                                 const SizedBox(height: 24),
-                                if (_puedeEditar)
-                                  SizedBox(
-                                    width: 240,
-                                    height: 48,
-                                    child: SoftButton(
-                                      borderRadius: 24,
-                                      onTap: _mostrarOpcionesCarga,
-                                      child: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: const [
-                                          Icon(
-                                              Icons.add_circle_outline_rounded,
-                                              color: Colors.white,
-                                              size: 18),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            "Cargar Mi Primer Cuadro",
-                                            style: TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.w800,
-                                                fontSize: 13.5),
+                                // 💡 Botones visibles para ADMIN / ADM / PROD-ADM
+                                if (_puedeEditar) ...[
+                                  Wrap(
+                                    spacing: 12,
+                                    runSpacing: 10,
+                                    alignment: WrapAlignment.center,
+                                    children: [
+                                      SizedBox(
+                                        width: 190,
+                                        height: 46,
+                                        child: SoftButton(
+                                          borderRadius: 23,
+                                          onTap: _mostrarModalNuevoCuadro,
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: const [
+                                              Icon(Icons.grid_view_rounded,
+                                                  color: Colors.white, size: 18),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                "Nuevo Cuadro",
+                                                style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 13),
+                                              ),
+                                            ],
                                           ),
-                                        ],
+                                        ),
                                       ),
-                                    ),
+                                      SizedBox(
+                                        width: 190,
+                                        height: 46,
+                                        child: SoftButton(
+                                          isSecondary: true,
+                                          borderRadius: 23,
+                                          onTap: _mostrarModalNuevaPlantacion,
+                                          child: Row(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: const [
+                                              Icon(Icons.park_outlined,
+                                                  color: AgroTheme.colorAccentDark, size: 18),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                "Nueva Plantación",
+                                                style: TextStyle(
+                                                    color: AgroTheme.colorAccentDark,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 13),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
+                                ],
                               ],
                             ),
                           ),
@@ -1470,6 +1503,7 @@ class _InventarioPlantacionScreenState
           ],
         ),
       ),
+      // 💡 Botón flotante habilitado para cualquier rol administrativo
       floatingActionButton: _puedeEditar
           ? SoftButton(
               padding:

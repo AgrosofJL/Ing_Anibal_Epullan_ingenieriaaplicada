@@ -63,8 +63,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   // 3. Catálogo de Insumos y Receta Foliar
   List<Map<String, dynamic>> _catalogoInsumos = [];
   String? _idProductoSeleccionado;
-  
-  // 💡 ACA ES LO NUEVO: Selector de tipo de dosis (100L o Por Ha)
+
+  // Modalidad de Dosis
   String _modalidadDosis = "DOSIS_100"; // 'DOSIS_100' | 'DOSIS_HA'
   final TextEditingController _dosisEntradaController = TextEditingController();
   final TextEditingController _dosisMaquinaController = TextEditingController();
@@ -73,12 +73,17 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
   final List<Map<String, dynamic>> _itemsRecetaTemporal = [];
 
-  // 💡 ACA ES LO NUEVO: Parámetros Técnicos de Aplicación (parametros_aplic)
-  final TextEditingController _paramVientoCtrl = TextEditingController(text: "5-10 km/h");
-  final TextEditingController _paramTempCtrl = TextEditingController(text: "18-22 °C");
-  final TextEditingController _paramGotaCtrl = TextEditingController(text: "Media (200-300 µm)");
-  final TextEditingController _paramVelocidadCtrl = TextEditingController(text: "5.5 km/h");
-  final TextEditingController _paramCaudalCtrl = TextEditingController(text: "1000 L/Ha");
+  // Parámetros Técnicos de Aplicación (parametros_aplic)
+  final TextEditingController _paramVientoCtrl =
+      TextEditingController(text: "5-10 km/h");
+  final TextEditingController _paramTempCtrl =
+      TextEditingController(text: "18-22 °C");
+  final TextEditingController _paramGotaCtrl =
+      TextEditingController(text: "Media (200-300 µm)");
+  final TextEditingController _paramVelocidadCtrl =
+      TextEditingController(text: "5.5 km/h");
+  final TextEditingController _paramCaudalCtrl =
+      TextEditingController(text: "1000 L/Ha");
 
   @override
   void initState() {
@@ -108,9 +113,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     final prefs = await SharedPreferences.getInstance();
     _responsable = prefs.getString('userName') ?? "Ingeniero Agrónomo";
 
-    final anioActual = DateTime.now().year;
-
-    // 1. Configurar N° de Orden
+    // 1. Configuración de Identificador Correlativo amarrado al cod_receta cabecera
     if (_esEdicion) {
       final ordenMap = widget.ordenParaEditar!;
       _numeroOrden = ordenMap['cod_orden'] is int
@@ -123,29 +126,24 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           (ordenMap['vol_ha']?.toString() ?? '1000').replaceAll('.0', '');
       _paramCaudalCtrl.text = "${_volumenHaController.text} L/Ha";
     } else {
-      final resContador = await db.rawQuery(
-        'SELECT COUNT(DISTINCT cod_orden) as total FROM recetas_aplicaciones WHERE cod_productor = ?',
-        [widget.codProductor],
-      );
-      int totalOrdenesProd = (resContador.first['total'] as int?) ?? 0;
-      int nuevoCorrelativo = totalOrdenesProd + 1;
-      _codigoOrdenFormateado =
-          "$anioActual${nuevoCorrelativo.toString().padLeft(4, '0')}";
-      _numeroOrden = int.tryParse(_codigoOrdenFormateado) ??
-          (anioActual * 10000 + nuevoCorrelativo);
+      // ACA ES LO NUEVO: El cod_orden toma el ID autoincremental de cod_receta
+      final int siguienteRecetaId = await DatabaseHelper.instance
+          .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
+      _numeroOrden = siguienteRecetaId;
+      _codigoOrdenFormateado = _numeroOrden.toString();
     }
 
     // 2. Cargar parámetros técnicos existentes si es edición
     if (_esEdicion) {
       try {
-        final params = await db.query(
+        final resParams = await db.query(
           'parametros_aplic',
           where: 'cod_orden = ?',
           whereArgs: [_numeroOrden],
           limit: 1,
         );
-        if (params.isNotEmpty) {
-          final p = params.first;
+        if (resParams.isNotEmpty) {
+          final p = resParams.first;
           _paramVientoCtrl.text = (p['vel_viento'] ?? '').toString();
           _paramTempCtrl.text = (p['Temperatura'] ?? '').toString();
           _paramGotaCtrl.text = (p['Tamano_gota'] ?? '').toString();
@@ -235,10 +233,10 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _superficieTotalSeleccionada = supAcum;
     }
 
-    // 5. Cargar Catálogo de Insumos
+    // 5. Catálogo de Insumos
     await _recargarCatalogoInsumos();
 
-    // 6. Pre-cargar productos si es edición
+    // 6. Pre-cargar productos de la receta en edición
     if (_esEdicion) {
       final itemsRaw = widget.ordenParaEditar!['items'];
       if (itemsRaw is List) {
@@ -250,8 +248,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
             'producto': it['producto'] ?? 'Insumo',
             'rubro': it['rubro'] ?? 'General',
             'dosis_100': it['dosis_100']?.toString() ?? '0',
-            'dosis_maq': dMaq,
+            'dosis_entrada': it['dosis_100']?.toString() ?? '0',
             'modalidad_dosis': it['modalidad_dosis'] ?? 'DOSIS_100',
+            'dosis_maq': dMaq,
             'tc': it['tc'] ?? 0,
             'ti': it['ti'] ?? 0,
             'orden_aplic': it['orden_aplic'] ?? (_itemsRecetaTemporal.length + 1),
@@ -381,18 +380,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     });
   }
 
-  // 💡 Cálculo dinámico de dosis por máquina según la modalidad elegida
   void _calcularDosisMaquina(String valorEntrada) {
     final double valor = double.tryParse(valorEntrada.replaceAll(',', '.').trim()) ?? 0.0;
-    final double volCaldoHa = double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+    final double volCaldoHa =
+        double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
 
     setState(() {
       if (_modalidadDosis == "DOSIS_100") {
-        // Modo Concentración: Valor cada 100 L. Para máquina de 2000L = valor * 20
         final double factor = _capacidadMaquinaLitros / 100.0;
         _dosisMaquinaCalculada = valor * factor;
       } else {
-        // Modo Superficie (Por Ha): Dosis Ha / (Vol Ha / Capacidad Maq)
         if (volCaldoHa > 0) {
           final double hectareasPorMaquina = _capacidadMaquinaLitros / volCaldoHa;
           _dosisMaquinaCalculada = valor * hectareasPorMaquina;
@@ -404,7 +401,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     });
   }
 
-  // 💡 Modal rápido para que el ingeniero agregue insumos al catálogo
+  // ESTO LO MODIFIQUE: Modal rápido de alta de producto al catálogo
   void _mostrarModalNuevoInsumoCatalogo() {
     final fKey = GlobalKey<FormState>();
     final nombreCtrl = TextEditingController();
@@ -440,7 +437,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                   child: Container(
                     width: 38,
                     height: 4,
-                    decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
+                    decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2)),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -449,9 +448,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                   children: [
                     const Text(
                       "Nuevo Insumo al Catálogo",
-                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: AgroTheme.colorText),
+                      style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          color: AgroTheme.colorText),
                     ),
-                    IconButton(icon: const Icon(Icons.close_rounded), onPressed: () => Navigator.pop(ctx)),
+                    IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(ctx)),
                   ],
                 ),
                 const Divider(color: AgroTheme.colorBorder),
@@ -462,30 +466,41 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       children: [
                         TextFormField(
                           controller: nombreCtrl,
-                          decoration: _inputDecoration("Nombre Comercial del Producto (Ej: Coragen)"),
-                          validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                          decoration: _inputDecoration(
+                              "Nombre Comercial del Producto (Ej: Coragen)"),
+                          validator: (v) =>
+                              v == null || v.trim().isEmpty ? "Obligatorio" : null,
                         ),
                         const SizedBox(height: 12),
                         DropdownButtonFormField<String>(
                           value: rubroSel,
                           decoration: _inputDecoration("Rubro / Clasificación"),
                           items: const [
-                            DropdownMenuItem(value: "AGROQUIMICOS", child: Text("Agroquímico (Insecticida / Fungicida)")),
-                            DropdownMenuItem(value: "FERTILIZANTES", child: Text("Fertilizante Foliar")),
-                            DropdownMenuItem(value: "HERBICIDAS", child: Text("Herbicida")),
-                            DropdownMenuItem(value: "COADYUVANTES", child: Text("Coadyuvante / Aceite")),
+                            DropdownMenuItem(
+                                value: "AGROQUIMICOS",
+                                child: Text("Agroquímico (Insecticida / Fungicida)")),
+                            DropdownMenuItem(
+                                value: "FERTILIZANTES",
+                                child: Text("Fertilizante Foliar")),
+                            DropdownMenuItem(
+                                value: "HERBICIDAS", child: Text("Herbicida")),
+                            DropdownMenuItem(
+                                value: "COADYUVANTES",
+                                child: Text("Coadyuvante / Aceite")),
                           ],
                           onChanged: (v) => rubroSel = v ?? "AGROQUIMICOS",
                         ),
                         const SizedBox(height: 12),
                         TextFormField(
                           controller: activoCtrl,
-                          decoration: _inputDecoration("Principio Activo (Ej: Clorantraniliprole)"),
+                          decoration: _inputDecoration(
+                              "Principio Activo (Ej: Clorantraniliprole)"),
                         ),
                         const SizedBox(height: 12),
                         TextFormField(
                           controller: concentracionCtrl,
-                          decoration: _inputDecoration("Concentración (Ej: 20% SC)"),
+                          decoration: _inputDecoration(
+                              "Concentración (Ej: 20% SC)"),
                         ),
                         const SizedBox(height: 12),
                         Row(
@@ -494,7 +509,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               child: TextFormField(
                                 controller: tcCtrl,
                                 keyboardType: TextInputType.number,
-                                decoration: _inputDecoration("Tiempo Carencia (Días)"),
+                                decoration: _inputDecoration(
+                                    "Tiempo Carencia (Días)"),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -502,7 +518,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               child: TextFormField(
                                 controller: tiCtrl,
                                 keyboardType: TextInputType.number,
-                                decoration: _inputDecoration("Tiempo Reingreso (Horas)"),
+                                decoration: _inputDecoration(
+                                    "Tiempo Reingreso (Horas)"),
                               ),
                             ),
                           ],
@@ -537,7 +554,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
                       await db.insert('catalogo_insumos', rowNuevo);
                       try {
-                        await Supabase.instance.client.from('catalogo_insumos').insert(rowNuevo);
+                        await Supabase.instance.client
+                            .from('catalogo_insumos')
+                            .insert(rowNuevo);
                       } catch (_) {}
 
                       await _recargarCatalogoInsumos();
@@ -548,12 +567,17 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         });
                         Navigator.pop(ctx);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(backgroundColor: AgroTheme.colorAccent, content: Text('Insumo agregado al catálogo')),
+                          const SnackBar(
+                              backgroundColor: AgroTheme.colorAccent,
+                              content: Text('Insumo agregado al catálogo')),
                         );
                       }
                     },
                     child: const Center(
-                      child: Text("Guardar Insumo", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                      child: Text("Guardar Insumo",
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800)),
                     ),
                   ),
                 ),
@@ -566,14 +590,19 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   }
 
   void _agregarProductoATabla() {
-    if (_idProductoSeleccionado == null || _idProductoSeleccionado!.trim().isEmpty) {
+    if (_idProductoSeleccionado == null ||
+        _idProductoSeleccionado!.trim().isEmpty) {
       _mostrarAlerta('Por favor, selecciona un insumo del catálogo.');
       return;
     }
 
     Map<String, dynamic> prodMap = {};
     for (var p in _catalogoInsumos) {
-      final String idActual = (p['cod_producto'] ?? p['ID_Insumos'] ?? p['id'] ?? p['Descripcion1'] ?? '')
+      final String idActual = (p['cod_producto'] ??
+              p['ID_Insumos'] ??
+              p['id'] ??
+              p['Descripcion1'] ??
+              '')
           .toString()
           .trim();
       if (idActual == _idProductoSeleccionado!.trim()) {
@@ -587,7 +616,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       return;
     }
 
-    final cleanEntrada = _dosisEntradaController.text.trim().replaceAll(',', '.');
+    final cleanEntrada =
+        _dosisEntradaController.text.trim().replaceAll(',', '.');
     final double dosisEntradaNum = double.tryParse(cleanEntrada) ?? 0.0;
 
     if (dosisEntradaNum <= 0) {
@@ -595,14 +625,15 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       return;
     }
 
-    final double volCaldoHa = double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+    final double volCaldoHa =
+        double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
     double dosis100Final = 0.0;
 
     if (_modalidadDosis == "DOSIS_100") {
       dosis100Final = dosisEntradaNum;
     } else {
-      // Si ingresó Dosis/Ha, calculamos su equivalente cada 100L para los cálculos de caldo
-      dosis100Final = volCaldoHa > 0 ? (dosisEntradaNum / (volCaldoHa / 100.0)) : dosisEntradaNum;
+      dosis100Final =
+          volCaldoHa > 0 ? (dosisEntradaNum / (volCaldoHa / 100.0)) : dosisEntradaNum;
     }
 
     final double dosisMaqNum = double.tryParse(
@@ -611,8 +642,12 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
     setState(() {
       _itemsRecetaTemporal.add({
-        'cod_producto': prodMap['cod_producto'] ?? prodMap['ID_Insumos'] ?? prodMap['id'] ?? 0,
-        'producto': prodMap['Descripcion1'] ?? prodMap['descripcion'] ?? 'Insumo',
+        'cod_producto': prodMap['cod_producto'] ??
+            prodMap['ID_Insumos'] ??
+            prodMap['id'] ??
+            0,
+        'producto':
+            prodMap['Descripcion1'] ?? prodMap['descripcion'] ?? 'Insumo',
         'rubro': prodMap['rubro'] ?? 'General',
         'dosis_100': dosis100Final.toStringAsFixed(2),
         'dosis_entrada': cleanEntrada,
@@ -683,7 +718,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ??
               1000.0;
 
-      // 1. Limpiar versiones previas si es edición
+      // ACA ES LO NUEVO: Se define siguienteRecetaId como cod_orden cabecera
+      final int siguienteRecetaId = _esEdicion
+          ? _numeroOrden
+          : await DatabaseHelper.instance
+              .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
+
+      _numeroOrden = siguienteRecetaId;
+
       if (_esEdicion) {
         await db.delete(
           'recetas_aplicaciones',
@@ -697,23 +739,20 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         );
       }
 
-      int siguienteRecetaId = await DatabaseHelper.instance
-          .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
-
       Batch batch = db.batch();
 
-      // 2. Insertar líneas de receta foliar
+      // Guardar detalle de la receta
       for (int i = 0; i < _itemsRecetaTemporal.length; i++) {
         final item = _itemsRecetaTemporal[i];
         final int idActual = siguienteRecetaId + i;
 
         final rowReceta = {
           'cod_receta': idActual,
-          'cod_orden': _numeroOrden,
+          'cod_orden': siguienteRecetaId,
           'cod_productor': widget.codProductor,
           'productor': widget.nombreProductor,
           'orden_aplic': i + 1,
-          'ref': _numeroOrden,
+          'ref': siguienteRecetaId,
           'fecha': _fecha,
           'chacra': _chacraSeleccionada,
           'cuadros': cuadrosConcatenados,
@@ -735,13 +774,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
         batch.insert('recetas_aplicaciones', rowReceta);
 
-        // Upsert en Supabase en segundo plano
-        Supabase.instance.client.from('recetas_aplicaciones').upsert(rowReceta).catchError((_) {});
+        Supabase.instance.client
+            .from('recetas_aplicaciones')
+            .upsert(rowReceta)
+            .catchError((_) {});
       }
 
-      // 3. 💡 Guardar parámetros técnicos de aplicación (parametros_aplic)
+      // ACA ES LO NUEVO: Guardar parámetros técnicos amarrados a cod_orden y cod_receta
       final rowParametros = {
-        'cod_orden': _numeroOrden,
+        'cod_orden': siguienteRecetaId,
+        'cod_receta': siguienteRecetaId,
         'vel_viento': _paramVientoCtrl.text.trim(),
         'Temperatura': _paramTempCtrl.text.trim(),
         'Tamano_gota': _paramGotaCtrl.text.trim(),
@@ -755,7 +797,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
 
-      // Sincronizar parámetros con Supabase
       Supabase.instance.client.from('parametros_aplic').insert({
         'vel_viento': rowParametros['vel_viento'],
         'Temperatura': rowParametros['Temperatura'],
@@ -811,28 +852,35 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                   ? "Editar Orden #$_codigoOrdenFormateado"
                   : "Orden de Aplicación #$_codigoOrdenFormateado",
               style: const TextStyle(
-                  fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16.5,
+                  color: AgroTheme.colorText),
             ),
             Text(
               widget.nombreProductor,
               style: const TextStyle(
-                  fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
+                  fontSize: 11.5,
+                  color: AgroTheme.colorTextSecondary,
+                  fontWeight: FontWeight.w500),
             ),
           ],
         ),
       ),
       body: _cargando
-          ? const Center(child: CircularProgressIndicator(color: AgroTheme.colorAccent))
+          ? const Center(
+              child: CircularProgressIndicator(color: AgroTheme.colorAccent))
           : SafeArea(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Form(
                   key: _formKey,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // SECCIÓN 1: CABECERA
-                      _buildSeccionHeader("1. Datos de Cabecera", Icons.event_note_rounded),
+                      _buildSeccionHeader(
+                          "1. Datos de Cabecera", Icons.event_note_rounded),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -848,39 +896,49 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                         fontSize: 13,
                                         color: AgroTheme.colorTextSecondary)),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                      color: AgroTheme.colorBg, borderRadius: BorderRadius.circular(8)),
+                                      color: AgroTheme.colorBg,
+                                      borderRadius: BorderRadius.circular(8)),
                                   child: Text(_fecha,
                                       style: const TextStyle(
-                                          fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
+                                          fontWeight: FontWeight.w800,
+                                          color: AgroTheme.colorText)),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 14),
                             DropdownButtonFormField<String>(
                               value: _tipoAplicacionSeleccionado,
-                              decoration: _inputDecoration("Tipo de Aplicación"),
+                              decoration:
+                                  _inputDecoration("Tipo de Aplicación"),
                               items: _tiposAplicacion.map((tipo) {
-                                return DropdownMenuItem<String>(value: tipo, child: Text(tipo));
+                                return DropdownMenuItem<String>(
+                                    value: tipo, child: Text(tipo));
                               }).toList(),
                               onChanged: (val) {
                                 if (val != null) {
-                                  setState(() => _tipoAplicacionSeleccionado = val);
+                                  setState(
+                                      () => _tipoAplicacionSeleccionado = val);
                                   _cargarMotivosPorTipo(val);
                                 }
                               },
                             ),
                             const SizedBox(height: 14),
                             DropdownButtonFormField<String>(
-                              value: _esMotivoPersonalizado ? "__OTRO__" : _motivoSeleccionado,
+                              value: _esMotivoPersonalizado
+                                  ? "__OTRO__"
+                                  : _motivoSeleccionado,
                               isExpanded: true,
-                              decoration: _inputDecoration("Motivo Técnico de Aplicación"),
+                              decoration: _inputDecoration(
+                                  "Motivo Técnico de Aplicación"),
                               items: [
                                 ..._motivosDisponibles.map((mot) {
                                   return DropdownMenuItem<String>(
                                     value: mot,
-                                    child: Text(mot, overflow: TextOverflow.ellipsis),
+                                    child: Text(mot,
+                                        overflow: TextOverflow.ellipsis),
                                   );
                                 }),
                                 const DropdownMenuItem<String>(
@@ -906,9 +964,11 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               const SizedBox(height: 10),
                               TextFormField(
                                 controller: _motivoCustomController,
-                                decoration: _inputDecoration("Escribe el nuevo motivo técnico..."),
+                                decoration: _inputDecoration(
+                                    "Escribe el nuevo motivo técnico..."),
                                 validator: (val) {
-                                  if (_esMotivoPersonalizado && (val == null || val.trim().isEmpty)) {
+                                  if (_esMotivoPersonalizado &&
+                                      (val == null || val.trim().isEmpty)) {
                                     return "Ingresá el motivo técnico";
                                   }
                                   return null;
@@ -921,7 +981,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _momentoController,
-                                    decoration: _inputDecoration("Momento (ej. Fruto 10mm)"),
+                                    decoration: _inputDecoration(
+                                        "Momento (ej. Fruto 10mm)"),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -929,14 +990,19 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   child: TextFormField(
                                     controller: _volumenHaController,
                                     keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration("Volumen Caldo (L/Ha)"),
+                                    decoration: _inputDecoration(
+                                        "Volumen Caldo (L/Ha)"),
                                     validator: (val) =>
-                                        val == null || val.isEmpty ? "Obligatorio" : null,
+                                        val == null || val.isEmpty
+                                            ? "Obligatorio"
+                                            : null,
                                     onChanged: (v) {
                                       setState(() {
                                         _paramCaudalCtrl.text = "$v L/Ha";
-                                        if (_dosisEntradaController.text.isNotEmpty) {
-                                          _calcularDosisMaquina(_dosisEntradaController.text);
+                                        if (_dosisEntradaController
+                                            .text.isNotEmpty) {
+                                          _calcularDosisMaquina(
+                                              _dosisEntradaController.text);
                                         }
                                       });
                                     },
@@ -950,7 +1016,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       const SizedBox(height: 24),
 
                       // SECCIÓN 2: CUADROS Y CHACRA
-                      _buildSeccionHeader("2. Ubicación y Cuadros", Icons.map_outlined),
+                      _buildSeccionHeader(
+                          "2. Ubicación y Cuadros", Icons.map_outlined),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -960,13 +1027,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                           children: [
                             DropdownButtonFormField<String>(
                               value: _chacraSeleccionada,
-                              decoration: _inputDecoration("Seleccionar Chacra"),
+                              decoration:
+                                  _inputDecoration("Seleccionar Chacra"),
                               items: _chacrasDisponibles.map((chacra) {
-                                return DropdownMenuItem<String>(value: chacra, child: Text("Chacra: $chacra"));
+                                return DropdownMenuItem<String>(
+                                    value: chacra, child: Text("Chacra: $chacra"));
                               }).toList(),
                               onChanged: (nuevaChacra) {
                                 if (nuevaChacra != null) {
-                                  setState(() => _chacraSeleccionada = nuevaChacra);
+                                  setState(
+                                      () => _chacraSeleccionada = nuevaChacra);
                                   _cargarCuadrosDeInventario(nuevaChacra);
                                 }
                               },
@@ -974,25 +1044,30 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                             const SizedBox(height: 16),
                             if (_cultivosEnChacra.isNotEmpty) ...[
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text("Filtrar por Cultivo:",
                                       style: TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w800,
-                                          color: AgroTheme.colorTextSecondary)),
+                                          color:
+                                              AgroTheme.colorTextSecondary)),
                                   InkWell(
                                     onTap: () {
                                       setState(() {
-                                        if (_cultivosFiltroActivos.length == _cultivosEnChacra.length) {
+                                        if (_cultivosFiltroActivos.length ==
+                                            _cultivosEnChacra.length) {
                                           _cultivosFiltroActivos.clear();
                                         } else {
-                                          _cultivosFiltroActivos.addAll(_cultivosEnChacra);
+                                          _cultivosFiltroActivos
+                                              .addAll(_cultivosEnChacra);
                                         }
                                       });
                                     },
                                     child: Text(
-                                      _cultivosFiltroActivos.length == _cultivosEnChacra.length
+                                      _cultivosFiltroActivos.length ==
+                                              _cultivosEnChacra.length
                                           ? "Deseleccionar todos"
                                           : "Todos",
                                       style: const TextStyle(
@@ -1008,7 +1083,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 spacing: 8,
                                 runSpacing: 6,
                                 children: _cultivosEnChacra.map((cul) {
-                                  final isSel = _cultivosFiltroActivos.contains(cul);
+                                  final isSel =
+                                      _cultivosFiltroActivos.contains(cul);
                                   return FilterChip(
                                     label: Text(cul),
                                     selected: isSel,
@@ -1016,14 +1092,20 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                     checkmarkColor: Colors.white,
                                     labelStyle: TextStyle(
                                       fontSize: 12,
-                                      fontWeight: isSel ? FontWeight.w800 : FontWeight.w600,
-                                      color: isSel ? Colors.white : AgroTheme.colorText,
+                                      fontWeight: isSel
+                                          ? FontWeight.w800
+                                          : FontWeight.w600,
+                                      color: isSel
+                                          ? Colors.white
+                                          : AgroTheme.colorText,
                                     ),
                                     backgroundColor: AgroTheme.colorBg,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       side: BorderSide(
-                                          color: isSel ? AgroTheme.colorAccentDark : AgroTheme.colorBorder),
+                                          color: isSel
+                                              ? AgroTheme.colorAccentDark
+                                              : AgroTheme.colorBorder),
                                     ),
                                     onSelected: (selected) {
                                       setState(() {
@@ -1038,11 +1120,13 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 }).toList(),
                               ),
                               const SizedBox(height: 14),
-                              const Divider(height: 1, color: AgroTheme.colorBorder),
+                              const Divider(
+                                  height: 1, color: AgroTheme.colorBorder),
                               const SizedBox(height: 12),
                             ],
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
                                   "Cuadros (${_cuadrosSeleccionados.length}/${cuadrosParaMostrar.length} selec.)",
@@ -1056,7 +1140,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                     onTap: _seleccionarTodosCuadrosVisibles,
                                     child: Text(
                                       cuadrosParaMostrar.every((c) =>
-                                              _cuadrosSeleccionados.contains(c['cuadro']?.toString() ?? ''))
+                                              _cuadrosSeleccionados.contains(
+                                                  c['cuadro']?.toString() ??
+                                                      ''))
                                           ? "Deseleccionar visibles"
                                           : "Seleccionar visibles",
                                       style: const TextStyle(
@@ -1074,13 +1160,15 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 width: double.infinity,
                                 decoration: BoxDecoration(
                                   color: AgroTheme.colorBg,
-                                  borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                  borderRadius:
+                                      BorderRadius.circular(AgroTheme.radiusMd),
                                 ),
                                 child: const Center(
                                   child: Text(
                                     "No hay cuadros con los cultivos seleccionados.",
                                     style: TextStyle(
-                                        fontSize: 12.5, color: AgroTheme.colorTextSecondary),
+                                        fontSize: 12.5,
+                                        color: AgroTheme.colorTextSecondary),
                                   ),
                                 ),
                               )
@@ -1089,27 +1177,42 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: cuadrosParaMostrar.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 6),
                                 itemBuilder: (context, idx) {
                                   final item = cuadrosParaMostrar[idx];
-                                  final String cuadroNom = item['cuadro']?.toString() ?? 'S/N';
-                                  final double sup =
-                                      double.tryParse(item['ha']?.toString() ?? '0') ?? 0.0;
-                                  final String variedad = item['variedad']?.toString() ?? 'S/D';
-                                  final String cultivo = item['cultivo']?.toString() ?? '';
-                                  final bool isSelected = _cuadrosSeleccionados.contains(cuadroNom);
+                                  final String cuadroNom =
+                                      item['cuadro']?.toString() ?? 'S/N';
+                                  final double sup = double.tryParse(
+                                          item['ha']?.toString() ?? '0') ??
+                                      0.0;
+                                  final String variedad =
+                                      item['variedad']?.toString() ?? 'S/D';
+                                  final String cultivo =
+                                      item['cultivo']?.toString() ?? '';
+                                  final bool isSelected =
+                                      _cuadrosSeleccionados.contains(cuadroNom);
 
                                   return InkWell(
-                                    onTap: () => _alternarSeleccionCuadro(cuadroNom, sup),
-                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                    onTap: () => _alternarSeleccionCuadro(
+                                        cuadroNom, sup),
+                                    borderRadius: BorderRadius.circular(
+                                        AgroTheme.radiusMd),
                                     child: AnimatedContainer(
-                                      duration: const Duration(milliseconds: 120),
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                      duration:
+                                          const Duration(milliseconds: 120),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 10),
                                       decoration: BoxDecoration(
-                                        color: isSelected ? AgroTheme.colorAccentSoft : AgroTheme.colorSurface,
-                                        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                        color: isSelected
+                                            ? AgroTheme.colorAccentSoft
+                                            : AgroTheme.colorSurface,
+                                        borderRadius: BorderRadius.circular(
+                                            AgroTheme.radiusMd),
                                         border: Border.all(
-                                          color: isSelected ? AgroTheme.colorAccent : AgroTheme.colorBorder,
+                                          color: isSelected
+                                              ? AgroTheme.colorAccent
+                                              : AgroTheme.colorBorder,
                                           width: isSelected ? 1.4 : 1.0,
                                         ),
                                       ),
@@ -1118,11 +1221,13 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                           Icon(
                                             isSelected
                                                 ? Icons.check_box_rounded
-                                                : Icons.check_box_outline_blank_rounded,
+                                                : Icons
+                                                    .check_box_outline_blank_rounded,
                                             size: 20,
                                             color: isSelected
                                                 ? AgroTheme.colorAccentDark
-                                                : AgroTheme.colorTextSecondary,
+                                                : AgroTheme
+                                                    .colorTextSecondary,
                                           ),
                                           const SizedBox(width: 10),
                                           Expanded(
@@ -1130,7 +1235,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                             child: Text(
                                               "Cuadro $cuadroNom",
                                               style: TextStyle(
-                                                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                                fontWeight: isSelected
+                                                    ? FontWeight.w800
+                                                    : FontWeight.w600,
                                                 fontSize: 13,
                                                 color: AgroTheme.colorText,
                                               ),
@@ -1144,20 +1251,25 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                               style: TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 12.5,
-                                                color: isSelected ? AgroTheme.colorAccentDark : AgroTheme.colorText,
+                                                color: isSelected
+                                                    ? AgroTheme.colorAccentDark
+                                                    : AgroTheme.colorText,
                                               ),
                                             ),
                                           ),
                                           Expanded(
                                             flex: 3,
                                             child: Text(
-                                              cultivo.isNotEmpty ? "$variedad ($cultivo)" : variedad,
+                                              cultivo.isNotEmpty
+                                                  ? "$variedad ($cultivo)"
+                                                  : variedad,
                                               textAlign: TextAlign.right,
                                               overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w500,
-                                                color: AgroTheme.colorTextSecondary,
+                                                color: AgroTheme
+                                                    .colorTextSecondary,
                                               ),
                                             ),
                                           ),
@@ -1169,21 +1281,27 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               ),
                               const SizedBox(height: 10),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 8),
                                 decoration: BoxDecoration(
                                   color: AgroTheme.colorGoldSoft,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text("Superficie Total a Tratar:",
                                         style: TextStyle(
-                                            fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF8A6A1E))),
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF8A6A1E))),
                                     Text(
                                       "${_superficieTotalSeleccionada.toStringAsFixed(2)} Ha",
                                       style: const TextStyle(
-                                          fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF8A6A1E)),
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(0xFF8A6A1E)),
                                     ),
                                   ],
                                 ),
@@ -1195,7 +1313,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       const SizedBox(height: 24),
 
                       // SECCIÓN 3: RECETA FOLIAR + SELECTOR TIPO APLIC + BOTÓN NUEVO INSUMO
-                      _buildSeccionHeader("3. Confección de Receta Foliar", Icons.science_outlined),
+                      _buildSeccionHeader("3. Confección de Receta Foliar",
+                          Icons.science_outlined),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -1203,9 +1322,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // 💡 Selector Tipo Aplic: Dosis / 100 L vs Dosis / Ha
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
                               children: [
                                 const Text(
                                   "Modalidad de Dosificación:",
@@ -1220,7 +1339,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   decoration: BoxDecoration(
                                     color: AgroTheme.colorBg,
                                     borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: AgroTheme.colorBorder),
+                                    border: Border.all(
+                                        color: AgroTheme.colorBorder),
                                   ),
                                   child: Row(
                                     children: [
@@ -1228,28 +1348,34 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                         onTap: () {
                                           setState(() {
                                             _modalidadDosis = "DOSIS_100";
-                                            if (_dosisEntradaController.text.isNotEmpty) {
-                                              _calcularDosisMaquina(_dosisEntradaController.text);
+                                            if (_dosisEntradaController
+                                                .text.isNotEmpty) {
+                                              _calcularDosisMaquina(
+                                                  _dosisEntradaController.text);
                                             }
                                           });
                                         },
                                         borderRadius: BorderRadius.circular(8),
                                         child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 6),
                                           decoration: BoxDecoration(
                                             color: _modalidadDosis == "DOSIS_100"
                                                 ? AgroTheme.colorAccentDark
                                                 : Colors.transparent,
-                                            borderRadius: BorderRadius.circular(8),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
                                           ),
                                           child: Text(
                                             "Dosis / 100 L",
                                             style: TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w800,
-                                              color: _modalidadDosis == "DOSIS_100"
+                                              color: _modalidadDosis ==
+                                                      "DOSIS_100"
                                                   ? Colors.white
-                                                  : AgroTheme.colorTextSecondary,
+                                                  : AgroTheme
+                                                      .colorTextSecondary,
                                             ),
                                           ),
                                         ),
@@ -1259,28 +1385,34 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                         onTap: () {
                                           setState(() {
                                             _modalidadDosis = "DOSIS_HA";
-                                            if (_dosisEntradaController.text.isNotEmpty) {
-                                              _calcularDosisMaquina(_dosisEntradaController.text);
+                                            if (_dosisEntradaController
+                                                .text.isNotEmpty) {
+                                              _calcularDosisMaquina(
+                                                  _dosisEntradaController.text);
                                             }
                                           });
                                         },
                                         borderRadius: BorderRadius.circular(8),
                                         child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 10, vertical: 6),
                                           decoration: BoxDecoration(
                                             color: _modalidadDosis == "DOSIS_HA"
                                                 ? AgroTheme.colorGold
                                                 : Colors.transparent,
-                                            borderRadius: BorderRadius.circular(8),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
                                           ),
                                           child: Text(
                                             "Dosis / Ha",
                                             style: TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w800,
-                                              color: _modalidadDosis == "DOSIS_HA"
+                                              color: _modalidadDosis ==
+                                                      "DOSIS_HA"
                                                   ? Colors.white
-                                                  : AgroTheme.colorTextSecondary,
+                                                  : AgroTheme
+                                                      .colorTextSecondary,
                                             ),
                                           ),
                                         ),
@@ -1292,49 +1424,73 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                             ),
                             const SizedBox(height: 14),
 
-                            // Fila: Buscador de Insumos + Botón "+" para nuevo insumo en catálogo
                             Row(
                               children: [
                                 Expanded(
                                   child: Builder(
                                     builder: (context) {
-                                      final Map<String, Map<String, dynamic>> insumosUnicos = {};
+                                      final Map<String, Map<String, dynamic>>
+                                          insumosUnicos = {};
                                       for (var prod in _catalogoInsumos) {
-                                        final String id = (prod['cod_producto'] ?? prod['ID_Insumos'] ?? prod['id'] ?? prod['Descripcion1'] ?? '')
+                                        final String id = (prod['cod_producto'] ??
+                                                prod['ID_Insumos'] ??
+                                                prod['id'] ??
+                                                prod['Descripcion1'] ??
+                                                '')
                                             .toString()
                                             .trim();
-                                        if (id.isNotEmpty && !insumosUnicos.containsKey(id)) {
+                                        if (id.isNotEmpty &&
+                                            !insumosUnicos.containsKey(id)) {
                                           insumosUnicos[id] = prod;
                                         }
                                       }
 
-                                      final bool existeSeleccionado = _idProductoSeleccionado != null &&
-                                          insumosUnicos.containsKey(_idProductoSeleccionado);
-                                      final String? valorSeguro = existeSeleccionado ? _idProductoSeleccionado : null;
+                                      final bool existeSeleccionado =
+                                          _idProductoSeleccionado != null &&
+                                              insumosUnicos.containsKey(
+                                                  _idProductoSeleccionado);
+                                      final String? valorSeguro =
+                                          existeSeleccionado
+                                              ? _idProductoSeleccionado
+                                              : null;
 
                                       return DropdownButtonFormField<String>(
                                         value: valorSeguro,
                                         isExpanded: true,
-                                        decoration: _inputDecoration("Buscar Insumo / Principio Activo"),
+                                        decoration: _inputDecoration(
+                                            "Buscar Insumo / Principio Activo"),
                                         hint: Text(
                                           insumosUnicos.isEmpty
                                               ? "Cargando catálogo..."
                                               : "Selecciona un insumo...",
-                                          style: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+                                          style: const TextStyle(
+                                              fontSize: 13,
+                                              color: AgroTheme
+                                                  .colorTextSecondary),
                                         ),
-                                        items: insumosUnicos.values.map((prod) {
-                                          final String idProd = (prod['cod_producto'] ?? prod['ID_Insumos'] ?? prod['id'] ?? prod['Descripcion1'])
+                                        items:
+                                            insumosUnicos.values.map((prod) {
+                                          final String idProd = (prod['cod_producto'] ??
+                                                  prod['ID_Insumos'] ??
+                                                  prod['id'] ??
+                                                  prod['Descripcion1'])
                                               .toString()
                                               .trim();
-                                          final String nombre = prod['Descripcion1'] ?? prod['descripcion'] ?? 'Insumo';
-                                          final String rubro = prod['rubro'] ?? 'General';
+                                          final String nombre =
+                                              prod['Descripcion1'] ??
+                                                  prod['descripcion'] ??
+                                                  'Insumo';
+                                          final String rubro =
+                                              prod['rubro'] ?? 'General';
 
                                           return DropdownMenuItem<String>(
                                             value: idProd,
                                             child: Text(
                                               "$nombre ($rubro)",
                                               overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 13),
                                             ),
                                           );
                                         }).toList(),
@@ -1350,17 +1506,19 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                // 💡 Botón mini "+" para agregar productos al catálogo
                                 Container(
                                   height: 48,
                                   width: 48,
                                   decoration: BoxDecoration(
                                     color: AgroTheme.colorAccentDark,
-                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                    borderRadius: BorderRadius.circular(
+                                        AgroTheme.radiusMd),
                                   ),
                                   child: IconButton(
-                                    icon: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
-                                    tooltip: "Dar de alta nuevo insumo en catálogo",
+                                    icon: const Icon(Icons.add_rounded,
+                                        color: Colors.white, size: 24),
+                                    tooltip:
+                                        "Dar de alta nuevo insumo en catálogo",
                                     onPressed: _mostrarModalNuevoInsumoCatalogo,
                                   ),
                                 ),
@@ -1376,13 +1534,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   child: TextFormField(
                                     controller: _dosisEntradaController,
                                     keyboardType:
-                                        const TextInputType.numberWithOptions(decimal: true),
+                                        const TextInputType.numberWithOptions(
+                                            decimal: true),
                                     decoration: _inputDecoration(
                                       _modalidadDosis == "DOSIS_100"
                                           ? "Dosis / 100 L (cc o g)"
                                           : "Dosis / Ha (Lts o Kg)",
                                     ),
-                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13.5),
                                     onChanged: _calcularDosisMaquina,
                                   ),
                                 ),
@@ -1390,21 +1551,26 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   flex: 5,
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 10),
                                     decoration: BoxDecoration(
                                       color: AgroTheme.colorBg,
-                                      borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                                      border: Border.all(color: AgroTheme.colorBorder),
+                                      borderRadius: BorderRadius.circular(
+                                          AgroTheme.radiusMd),
+                                      border: Border.all(
+                                          color: AgroTheme.colorBorder),
                                     ),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         const Text(
                                           "Dosis x Máquina (2000L):",
                                           style: TextStyle(
                                             fontSize: 10.5,
                                             fontWeight: FontWeight.bold,
-                                            color: AgroTheme.colorTextSecondary,
+                                            color:
+                                                AgroTheme.colorTextSecondary,
                                           ),
                                         ),
                                         const SizedBox(height: 3),
@@ -1434,7 +1600,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: const [
                                     Icon(Icons.add_circle_outline_rounded,
-                                        size: 18, color: AgroTheme.colorAccentDark),
+                                        size: 18,
+                                        color: AgroTheme.colorAccentDark),
                                     SizedBox(width: 8),
                                     Text(
                                       "Agregar a la Receta",
@@ -1456,37 +1623,46 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: _itemsRecetaTemporal.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 6),
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 6),
                                 itemBuilder: (context, idx) {
                                   final item = _itemsRecetaTemporal[idx];
-                                  final bool esHa = item['modalidad_dosis'] == "DOSIS_HA";
+                                  final bool esHa =
+                                      item['modalidad_dosis'] == "DOSIS_HA";
 
                                   return Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 10),
                                     decoration: BoxDecoration(
                                       color: AgroTheme.colorBg,
                                       borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(color: AgroTheme.colorBorder),
+                                      border: Border.all(
+                                          color: AgroTheme.colorBorder),
                                     ),
                                     child: Row(
                                       children: [
                                         Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 7, vertical: 3),
                                           decoration: BoxDecoration(
                                             color: AgroTheme.colorSurface,
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: AgroTheme.colorBorder),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            border: Border.all(
+                                                color: AgroTheme.colorBorder),
                                           ),
                                           child: Text(
                                             "#${item['orden_aplic']}",
                                             style: const TextStyle(
-                                                fontWeight: FontWeight.w800, fontSize: 11),
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 11),
                                           ),
                                         ),
                                         const SizedBox(width: 10),
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
                                                 item['producto'],
@@ -1503,7 +1679,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                                     : "Dosis 100L: ${item['dosis_100']}  ·  Máq (2000L): ${item['dosis_maq']} L/Kg",
                                                 style: const TextStyle(
                                                   fontSize: 11.5,
-                                                  color: AgroTheme.colorTextSecondary,
+                                                  color: AgroTheme
+                                                      .colorTextSecondary,
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                               ),
@@ -1511,9 +1688,12 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                           ),
                                         ),
                                         IconButton(
-                                          icon: const Icon(Icons.delete_outline_rounded,
-                                              size: 20, color: AgroTheme.colorDanger),
-                                          onPressed: () => _eliminarProductoDeReceta(idx),
+                                          icon: const Icon(
+                                              Icons.delete_outline_rounded,
+                                              size: 20,
+                                              color: AgroTheme.colorDanger),
+                                          onPressed: () =>
+                                              _eliminarProductoDeReceta(idx),
                                         ),
                                       ],
                                     ),
@@ -1526,8 +1706,10 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // 💡 SECCIÓN 4: PARÁMETROS TÉCNICOS DE APLICACIÓN (parametros_aplic)
-                      _buildSeccionHeader("4. Parámetros Técnicos de Pulverización", Icons.speed_rounded),
+                      // SECCIÓN 4: PARÁMETROS TÉCNICOS DE PULVERIZACIÓN (parametros_aplic)
+                      _buildSeccionHeader(
+                          "4. Parámetros Técnicos de Pulverización",
+                          Icons.speed_rounded),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -1539,14 +1721,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramVientoCtrl,
-                                    decoration: _inputDecoration("Vel. Viento (ej: 5-8 km/h)"),
+                                    decoration: _inputDecoration(
+                                        "Vel. Viento (ej: 5-8 km/h)"),
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramTempCtrl,
-                                    decoration: _inputDecoration("Temperatura (ej: 19 °C)"),
+                                    decoration: _inputDecoration(
+                                        "Temperatura (ej: 19 °C)"),
                                   ),
                                 ),
                               ],
@@ -1557,14 +1741,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramGotaCtrl,
-                                    decoration: _inputDecoration("Tamaño Gota (ej: 250 µm)"),
+                                    decoration: _inputDecoration(
+                                        "Tamaño Gota (ej: 250 µm)"),
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramVelocidadCtrl,
-                                    decoration: _inputDecoration("Vel. Avance (ej: 5.5 km/h)"),
+                                    decoration: _inputDecoration(
+                                        "Vel. Avance (ej: 5.5 km/h)"),
                                   ),
                                 ),
                               ],
@@ -1572,7 +1758,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                             const SizedBox(height: 12),
                             TextFormField(
                               controller: _paramCaudalCtrl,
-                              decoration: _inputDecoration("Caudal por Hectárea (ej: 1000 L/Ha)"),
+                              decoration: _inputDecoration(
+                                  "Caudal por Hectárea (ej: 1000 L/Ha)"),
                             ),
                           ],
                         ),
@@ -1619,7 +1806,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         const SizedBox(width: 8),
         Text(titulo,
             style: const TextStyle(
-                fontWeight: FontWeight.w800, fontSize: 15, color: AgroTheme.colorText)),
+                fontWeight: FontWeight.w800,
+                fontSize: 15,
+                color: AgroTheme.colorText)),
       ],
     );
   }
@@ -1630,7 +1819,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
       border: Border.all(color: AgroTheme.colorBorder),
       boxShadow: const [
-        BoxShadow(color: Color(0x04141E18), blurRadius: 10, offset: Offset(0, 3)),
+        BoxShadow(
+            color: Color(0x04141E18), blurRadius: 10, offset: Offset(0, 3)),
       ],
     );
   }
@@ -1638,7 +1828,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+      labelStyle:
+          const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
       filled: true,
       fillColor: AgroTheme.colorBg,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

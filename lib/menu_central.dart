@@ -44,13 +44,14 @@ class _MenuCentralState extends State<MenuCentral>
     _inicializarSesionYContexto();
   }
 
-  void _handleSyncAnimation() {
+ void _handleSyncAnimation() {
     if (ServicioSincronizacion.estaSincronizando.value) {
       _rotationController.repeat();
     } else {
       _rotationController.stop();
       _rotationController.reset();
-      _cargarProductores();
+      // 💡 ACA ES LO NUEVO: Re-inicializar sesión completa tras la sincronización
+      _inicializarSesionYContexto();
     }
   }
 
@@ -116,10 +117,13 @@ class _MenuCentralState extends State<MenuCentral>
           _selectedCodProductor = null;
         }
       } else {
-        // Asignación cerrada para cuentas de campo
+        // 💡 Forzar el código actualizado tras la sincronización
         _selectedCodProductor = _userCodProductor;
         if (_listaProductores.isNotEmpty) {
-          _productorActivo = _listaProductores.first;
+          _productorActivo = _listaProductores.firstWhere(
+            (p) => p['cod_productor'] == _userCodProductor,
+            orElse: () => _listaProductores.first,
+          );
         } else {
           _productorActivo = {
             'cod_productor': _userCodProductor,

@@ -88,31 +88,22 @@ class ServicioBajar {
           // 💡 ACA ES LO NUEVO: Si el Ingeniero modificó al usuario actual en la nube,
           // actualizamos sus datos en tiempo real en SharedPreferences
           if (tabla == 'usuarios') {
-            final String correoFila = (item['correo'] ?? '').toString().trim().toLowerCase();
-            final int idFila = int.tryParse(item['id']?.toString() ?? '0') ?? 0;
+  final String correoFila = (item['correo'] ?? '').toString().trim().toLowerCase();
+  final int idFila = int.tryParse(item['id']?.toString() ?? '0') ?? 0;
 
-            final bool esUsuarioActual = (idUsuarioLogueado > 0 && idFila == idUsuarioLogueado) ||
-                (correoLogueado.isNotEmpty && correoFila == correoLogueado);
+  final bool esUsuarioActual = (idUsuarioLogueado > 0 && idFila == idUsuarioLogueado) ||
+      (correoLogueado.isNotEmpty && correoFila == correoLogueado);
 
-            if (esUsuarioActual) {
-              final String estadoUsuario = (item['estado'] ?? 'ACTIVO').toString().trim().toUpperCase();
-              final String rolUsuario = (item['rol'] ?? 'OPERARIO').toString().trim().toUpperCase();
-              final String operarioNombre = (item['operario'] ?? '').toString();
-              final String deviceGuardado = (item['device'] ?? '').toString();
-              final int codProd = int.tryParse(item['cod_productor']?.toString() ?? '0') ?? 0;
+  if (esUsuarioActual) {
+    final int nuevoCodProd = int.tryParse(item['cod_productor']?.toString() ?? '0') ?? 0;
+    final String nuevoRol = (item['rol'] ?? 'OPERARIO').toString().trim().toUpperCase();
+    final String nuevoNombre = (item['operario'] ?? '').toString();
 
-              // Actualizamos sesión local
-              await prefs.setString('userRole', rolUsuario);
-              await prefs.setString('userName', operarioNombre);
-              await prefs.setString('userDevice', deviceGuardado);
-              await prefs.setInt('userCodProductor', codProd);
-
-              if (estadoUsuario != 'ACTIVO') {
-                accesoPermitido = false;
-                motivoCorte = 'Su usuario ha sido dado de baja o suspendido por el Ingeniero administrador.';
-              }
-            }
-          }
+    await prefs.setInt('userCodProductor', nuevoCodProd);
+    await prefs.setString('userRole', nuevoRol);
+    await prefs.setString('userName', nuevoNombre);
+  }
+}
 
           batch.insert(
             tabla,
