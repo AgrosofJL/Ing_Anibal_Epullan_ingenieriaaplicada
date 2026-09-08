@@ -113,27 +113,32 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     final prefs = await SharedPreferences.getInstance();
     _responsable = prefs.getString('userName') ?? "Ingeniero Agrónomo";
 
-    // 1. Configuración de Identificador Correlativo amarrado al cod_receta cabecera
+    // 1. Identificación y numeración de la orden
     if (_esEdicion) {
       final ordenMap = widget.ordenParaEditar!;
-      _numeroOrden = ordenMap['cod_orden'] is int
-          ? ordenMap['cod_orden']
-          : int.tryParse(ordenMap['cod_orden']?.toString() ?? '0') ?? 0;
+      _numeroOrden = int.tryParse(ordenMap['cod_orden']?.toString() ??
+              ordenMap['ref']?.toString() ??
+              ordenMap['cod_receta']?.toString() ??
+              '0') ??
+          0;
       _codigoOrdenFormateado = _numeroOrden.toString();
       _fecha = ordenMap['fecha']?.toString() ?? _fecha;
-      _momentoController.text = ordenMap['momento']?.toString() ?? '';
-      _volumenHaController.text =
-          (ordenMap['vol_ha']?.toString() ?? '1000').replaceAll('.0', '');
+      _momentoController.text = ordenMap['momento_aplic']?.toString() ??
+          ordenMap['momento']?.toString() ??
+          '';
+      _volumenHaController.text = (ordenMap['vol_aplic_ha']?.toString() ??
+              ordenMap['vol_ha']?.toString() ??
+              '1000')
+          .replaceAll('.0', '');
       _paramCaudalCtrl.text = "${_volumenHaController.text} L/Ha";
     } else {
-      // ACA ES LO NUEVO: El cod_orden toma el ID autoincremental de cod_receta
       final int siguienteRecetaId = await DatabaseHelper.instance
           .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
       _numeroOrden = siguienteRecetaId;
       _codigoOrdenFormateado = _numeroOrden.toString();
     }
 
-    // 2. Cargar parámetros técnicos existentes si es edición
+    // 2. Parámetros de pulverización
     if (_esEdicion) {
       try {
         final resParams = await db.query(
@@ -153,7 +158,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       } catch (_) {}
     }
 
-    // 3. Tipos de Aplicación
+    // 3. Tipos de aplicación y motivos
     final resTipos = await db.rawQuery('''
       SELECT DISTINCT tipo_aplic 
       FROM motivos_aplicaciones 
@@ -167,7 +172,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     }
 
     if (_esEdicion) {
-      final motivoExistente = widget.ordenParaEditar!['motivo']?.toString() ?? '';
+      final motivoExistente = widget.ordenParaEditar!['motivo_aplic']?.toString() ??
+          widget.ordenParaEditar!['motivo']?.toString() ??
+          '';
       if (_motivosDisponibles.contains(motivoExistente)) {
         _motivoSeleccionado = motivoExistente;
         _esMotivoPersonalizado = false;
@@ -178,7 +185,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       }
     }
 
-    // 4. Traer Chacras
+    // 4. Chacras disponibles
     final resChacras = await db.rawQuery('''
       SELECT DISTINCT chacra 
       FROM inventario_plantacion 
@@ -213,19 +220,24 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       await _cargarCuadrosDeInventario(_chacraSeleccionada!);
     }
 
+    // 5. Reconstrucción de cuadros seleccionados en edición
     if (_esEdicion) {
       final String cuadrosStr = widget.ordenParaEditar!['cuadros']?.toString() ?? '';
-      final cuadrosGuardados = cuadrosStr
+      final Set<String> cuadrosNormalizados = cuadrosStr
           .split(',')
-          .map((e) => e.trim().replaceAll('Cuadro', '').trim())
+          .map((e) => e
+              .trim()
+              .replaceAll(RegExp(r'(?i)cuadro'), '')
+              .replaceAll('C.', '')
+              .trim())
           .where((e) => e.isNotEmpty)
           .toSet();
 
       _cuadrosSeleccionados.clear();
       double supAcum = 0.0;
       for (var c in _todosCuadrosInventario) {
-        final nom = c['cuadro']?.toString() ?? '';
-        if (cuadrosGuardados.contains(nom)) {
+        final nom = (c['cuadro'] ?? '').toString().trim();
+        if (cuadrosNormalizados.contains(nom)) {
           _cuadrosSeleccionados.add(nom);
           supAcum += double.tryParse(c['ha']?.toString() ?? '0') ?? 0.0;
         }
@@ -233,29 +245,41 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _superficieTotalSeleccionada = supAcum;
     }
 
-    // 5. Catálogo de Insumos
+    // 6. Catálogo de Insumos
     await _recargarCatalogoInsumos();
 
-    // 6. Pre-cargar productos de la receta en edición
+    // 7. Carga de los productos de la receta en edición
     if (_esEdicion) {
+      List<Map<String, dynamic>> itemsParaCargar = [];
       final itemsRaw = widget.ordenParaEditar!['items'];
-      if (itemsRaw is List) {
-        _itemsRecetaTemporal.clear();
-        for (var it in itemsRaw) {
-          final double dMaq = double.tryParse(it['dosis_maq']?.toString() ?? '0') ?? 0.0;
-          _itemsRecetaTemporal.add({
-            'cod_producto': it['cod_producto'] ?? 0,
-            'producto': it['producto'] ?? 'Insumo',
-            'rubro': it['rubro'] ?? 'General',
-            'dosis_100': it['dosis_100']?.toString() ?? '0',
-            'dosis_entrada': it['dosis_100']?.toString() ?? '0',
-            'modalidad_dosis': it['modalidad_dosis'] ?? 'DOSIS_100',
-            'dosis_maq': dMaq,
-            'tc': it['tc'] ?? 0,
-            'ti': it['ti'] ?? 0,
-            'orden_aplic': it['orden_aplic'] ?? (_itemsRecetaTemporal.length + 1),
-          });
-        }
+
+      if (itemsRaw is List && itemsRaw.isNotEmpty) {
+        itemsParaCargar = itemsRaw.cast<Map<String, dynamic>>();
+      } else {
+        // Consulta directa a SQLite buscando las líneas reales de esta orden
+        itemsParaCargar = await db.query(
+          'recetas_aplicaciones',
+          where: 'cod_orden = ? AND cod_productor = ?',
+          whereArgs: [_numeroOrden, widget.codProductor],
+          orderBy: 'orden_aplic ASC, cod_receta ASC',
+        );
+      }
+
+      _itemsRecetaTemporal.clear();
+      for (var it in itemsParaCargar) {
+        final double dMaq = double.tryParse(it['dosis_maq']?.toString() ?? '0') ?? 0.0;
+        _itemsRecetaTemporal.add({
+          'cod_producto': it['cod_producto'] ?? it['ID_Insumos'] ?? 0,
+          'producto': it['producto'] ?? it['Descripcion1'] ?? 'Insumo',
+          'rubro': it['rubro'] ?? 'General',
+          'dosis_100': it['dosis_100']?.toString() ?? '0',
+          'dosis_entrada': it['dosis_entrada'] ?? it['dosis_100']?.toString() ?? '0',
+          'modalidad_dosis': it['modalidad_dosis'] ?? 'DOSIS_100',
+          'dosis_maq': dMaq,
+          'tc': it['tc'] ?? it['T_C'] ?? 0,
+          'ti': it['ti'] ?? it['TRI'] ?? 0,
+          'orden_aplic': it['orden_aplic'] ?? (_itemsRecetaTemporal.length + 1),
+        });
       }
     }
 
@@ -401,7 +425,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     });
   }
 
-  // ESTO LO MODIFIQUE: Modal rápido de alta de producto al catálogo
   void _mostrarModalNuevoInsumoCatalogo() {
     final fKey = GlobalKey<FormState>();
     final nombreCtrl = TextEditingController();
@@ -718,41 +741,43 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ??
               1000.0;
 
-      // ACA ES LO NUEVO: Se define siguienteRecetaId como cod_orden cabecera
-      final int siguienteRecetaId = _esEdicion
+      // 💡 PRESERVAR IDENTIFICADOR EN EDICIÓN (NO RE-GENERAR ID)
+      final int ordenIdFinal = _esEdicion
           ? _numeroOrden
           : await DatabaseHelper.instance
               .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
 
-      _numeroOrden = siguienteRecetaId;
+      _numeroOrden = ordenIdFinal;
 
       if (_esEdicion) {
         await db.delete(
           'recetas_aplicaciones',
           where: 'cod_orden = ? AND cod_productor = ?',
-          whereArgs: [_numeroOrden, widget.codProductor],
+          whereArgs: [ordenIdFinal, widget.codProductor],
         );
         await db.delete(
           'parametros_aplic',
           where: 'cod_orden = ?',
-          whereArgs: [_numeroOrden],
+          whereArgs: [ordenIdFinal],
         );
       }
 
+      int siguienteRecetaId = await DatabaseHelper.instance
+          .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
+
       Batch batch = db.batch();
 
-      // Guardar detalle de la receta
       for (int i = 0; i < _itemsRecetaTemporal.length; i++) {
         final item = _itemsRecetaTemporal[i];
         final int idActual = siguienteRecetaId + i;
 
         final rowReceta = {
           'cod_receta': idActual,
-          'cod_orden': siguienteRecetaId,
+          'cod_orden': ordenIdFinal,
           'cod_productor': widget.codProductor,
           'productor': widget.nombreProductor,
           'orden_aplic': i + 1,
-          'ref': siguienteRecetaId,
+          'ref': ordenIdFinal,
           'fecha': _fecha,
           'chacra': _chacraSeleccionada,
           'cuadros': cuadrosConcatenados,
@@ -780,10 +805,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
             .catchError((_) {});
       }
 
-      // ACA ES LO NUEVO: Guardar parámetros técnicos amarrados a cod_orden y cod_receta
       final rowParametros = {
-        'cod_orden': siguienteRecetaId,
-        'cod_receta': siguienteRecetaId,
+        'cod_orden': ordenIdFinal,
+        'cod_receta': ordenIdFinal,
         'vel_viento': _paramVientoCtrl.text.trim(),
         'Temperatura': _paramTempCtrl.text.trim(),
         'Tamano_gota': _paramGotaCtrl.text.trim(),
@@ -852,16 +876,12 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                   ? "Editar Orden #$_codigoOrdenFormateado"
                   : "Orden de Aplicación #$_codigoOrdenFormateado",
               style: const TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16.5,
-                  color: AgroTheme.colorText),
+                  fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
             ),
             Text(
               widget.nombreProductor,
               style: const TextStyle(
-                  fontSize: 11.5,
-                  color: AgroTheme.colorTextSecondary,
-                  fontWeight: FontWeight.w500),
+                  fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
             ),
           ],
         ),
@@ -1312,7 +1332,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // SECCIÓN 3: RECETA FOLIAR + SELECTOR TIPO APLIC + BOTÓN NUEVO INSUMO
+                      // SECCIÓN 3: RECETA FOLIAR
                       _buildSeccionHeader("3. Confección de Receta Foliar",
                           Icons.science_outlined),
                       const SizedBox(height: 12),
@@ -1806,9 +1826,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         const SizedBox(width: 8),
         Text(titulo,
             style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 15,
-                color: AgroTheme.colorText)),
+                fontWeight: FontWeight.w800, fontSize: 15, color: AgroTheme.colorText)),
       ],
     );
   }

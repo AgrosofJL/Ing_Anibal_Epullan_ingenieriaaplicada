@@ -304,6 +304,15 @@ class DatabaseHelper {
         )
       ''');
 
+      await db.execute(''' CREATE TABLE IF NOT EXISTS _eliminaciones_pendientes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tabla TEXT,
+  campo_pk TEXT,
+  valor_pk TEXT,
+  fecha TEXT
+        )
+      ''');
+
       await db.execute('''
         CREATE TABLE IF NOT EXISTS config_app_enlaces (
           id INTEGER PRIMARY KEY,
