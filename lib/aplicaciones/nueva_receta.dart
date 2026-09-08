@@ -37,7 +37,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   String _codigoOrdenFormateado = "";
   String? _tipoAplicacionSeleccionado;
 
-  // Motivos dinámicos
   List<String> _motivosDisponibles = [];
   String? _motivoSeleccionado;
   bool _esMotivoPersonalizado = false;
@@ -48,7 +47,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       TextEditingController(text: "1000");
   String _responsable = "Ingeniero Agrónomo";
 
-  // Listas maestras desde SQLite
   List<String> _tiposAplicacion = [];
   List<String> _chacrasDisponibles = [];
   String? _chacraSeleccionada;
@@ -62,18 +60,17 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
   // 3. Catálogo de Insumos y Receta Foliar
   List<Map<String, dynamic>> _catalogoInsumos = [];
+  List<String> _rubrosInsumosDisponibles = [];
   String? _idProductoSeleccionado;
-
-  // Modalidad de Dosis
-  String _modalidadDosis = "DOSIS_100"; // 'DOSIS_100' | 'DOSIS_HA'
-  final TextEditingController _dosisEntradaController = TextEditingController();
+  String _metodoDosis = "DOSIS_100"; // 'DOSIS_100' o 'DOSIS_HA'
+  final TextEditingController _dosisInputController = TextEditingController();
   final TextEditingController _dosisMaquinaController = TextEditingController();
   double _dosisMaquinaCalculada = 0.0;
   final double _capacidadMaquinaLitros = 2000.0;
 
   final List<Map<String, dynamic>> _itemsRecetaTemporal = [];
 
-  // Parámetros Técnicos de Aplicación (parametros_aplic)
+  // 4. Parámetros Técnicos de Pulverización
   final TextEditingController _paramVientoCtrl =
       TextEditingController(text: "5-10 km/h");
   final TextEditingController _paramTempCtrl =
@@ -97,7 +94,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     _motivoCustomController.dispose();
     _momentoController.dispose();
     _volumenHaController.dispose();
-    _dosisEntradaController.dispose();
+    _dosisInputController.dispose();
     _dosisMaquinaController.dispose();
     _paramVientoCtrl.dispose();
     _paramTempCtrl.dispose();
@@ -113,32 +110,28 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     final prefs = await SharedPreferences.getInstance();
     _responsable = prefs.getString('userName') ?? "Ingeniero Agrónomo";
 
-    // 1. Identificación y numeración de la orden
     if (_esEdicion) {
       final ordenMap = widget.ordenParaEditar!;
-      _numeroOrden = int.tryParse(ordenMap['cod_orden']?.toString() ??
-              ordenMap['ref']?.toString() ??
-              ordenMap['cod_receta']?.toString() ??
-              '0') ??
-          0;
+      _numeroOrden = ordenMap['cod_orden'] is int
+          ? ordenMap['cod_orden']
+          : int.tryParse(ordenMap['cod_orden']?.toString() ?? '0') ?? 0;
       _codigoOrdenFormateado = _numeroOrden.toString();
       _fecha = ordenMap['fecha']?.toString() ?? _fecha;
-      _momentoController.text = ordenMap['momento_aplic']?.toString() ??
-          ordenMap['momento']?.toString() ??
+      _momentoController.text = ordenMap['momento']?.toString() ??
+          ordenMap['momento_aplic']?.toString() ??
           '';
-      _volumenHaController.text = (ordenMap['vol_aplic_ha']?.toString() ??
-              ordenMap['vol_ha']?.toString() ??
+      _volumenHaController.text = (ordenMap['vol_ha']?.toString() ??
+              ordenMap['vol_aplic_ha']?.toString() ??
               '1000')
           .replaceAll('.0', '');
       _paramCaudalCtrl.text = "${_volumenHaController.text} L/Ha";
     } else {
-      final int siguienteRecetaId = await DatabaseHelper.instance
+      final int sigId = await DatabaseHelper.instance
           .obtenerSiguienteId('recetas_aplicaciones', 'cod_receta');
-      _numeroOrden = siguienteRecetaId;
+      _numeroOrden = sigId;
       _codigoOrdenFormateado = _numeroOrden.toString();
     }
 
-    // 2. Parámetros de pulverización
     if (_esEdicion) {
       try {
         final resParams = await db.query(
@@ -158,7 +151,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       } catch (_) {}
     }
 
-    // 3. Tipos de aplicación y motivos
     final resTipos = await db.rawQuery('''
       SELECT DISTINCT tipo_aplic 
       FROM motivos_aplicaciones 
@@ -172,8 +164,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     }
 
     if (_esEdicion) {
-      final motivoExistente = widget.ordenParaEditar!['motivo_aplic']?.toString() ??
-          widget.ordenParaEditar!['motivo']?.toString() ??
+      final motivoExistente = widget.ordenParaEditar!['motivo']?.toString() ??
+          widget.ordenParaEditar!['motivo_aplic']?.toString() ??
           '';
       if (_motivosDisponibles.contains(motivoExistente)) {
         _motivoSeleccionado = motivoExistente;
@@ -185,25 +177,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       }
     }
 
-    // 4. Chacras disponibles
-    final resChacras = await db.rawQuery('''
-      SELECT DISTINCT chacra 
-      FROM inventario_plantacion 
-      WHERE cod_productor = ? AND chacra IS NOT NULL AND TRIM(chacra) != '' 
-      ORDER BY chacra ASC
-    ''', [widget.codProductor]);
-    _chacrasDisponibles = resChacras.map((e) => e['chacra'].toString()).toList();
-
-    if (_chacrasDisponibles.isEmpty) {
-      final resChacrasCuadros = await db.rawQuery('''
-        SELECT DISTINCT chacra 
-        FROM cuadros 
-        WHERE cod_productor = ? AND chacra IS NOT NULL AND TRIM(chacra) != '' 
-        ORDER BY chacra ASC
-      ''', [widget.codProductor]);
-      _chacrasDisponibles =
-          resChacrasCuadros.map((e) => e['chacra'].toString()).toList();
-    }
+    await _recargarChacrasDisponibles();
 
     if (_esEdicion) {
       final chacraOrden = widget.ordenParaEditar!['chacra']?.toString() ?? '';
@@ -220,14 +194,13 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       await _cargarCuadrosDeInventario(_chacraSeleccionada!);
     }
 
-    // 5. Reconstrucción de cuadros seleccionados en edición
     if (_esEdicion) {
       final String cuadrosStr = widget.ordenParaEditar!['cuadros']?.toString() ?? '';
-      final Set<String> cuadrosNormalizados = cuadrosStr
+      final cuadrosGuardados = cuadrosStr
           .split(',')
           .map((e) => e
               .trim()
-              .replaceAll(RegExp(r'(?i)cuadro'), '')
+              .replaceAll(RegExp(r'cuadro', caseSensitive: false), '')
               .replaceAll('C.', '')
               .trim())
           .where((e) => e.isNotEmpty)
@@ -236,8 +209,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _cuadrosSeleccionados.clear();
       double supAcum = 0.0;
       for (var c in _todosCuadrosInventario) {
-        final nom = (c['cuadro'] ?? '').toString().trim();
-        if (cuadrosNormalizados.contains(nom)) {
+        final nom = c['cuadro']?.toString() ?? '';
+        if (cuadrosGuardados.contains(nom)) {
           _cuadrosSeleccionados.add(nom);
           supAcum += double.tryParse(c['ha']?.toString() ?? '0') ?? 0.0;
         }
@@ -245,10 +218,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _superficieTotalSeleccionada = supAcum;
     }
 
-    // 6. Catálogo de Insumos
     await _recargarCatalogoInsumos();
 
-    // 7. Carga de los productos de la receta en edición
     if (_esEdicion) {
       List<Map<String, dynamic>> itemsParaCargar = [];
       final itemsRaw = widget.ordenParaEditar!['items'];
@@ -256,7 +227,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       if (itemsRaw is List && itemsRaw.isNotEmpty) {
         itemsParaCargar = itemsRaw.cast<Map<String, dynamic>>();
       } else {
-        // Consulta directa a SQLite buscando las líneas reales de esta orden
         itemsParaCargar = await db.query(
           'recetas_aplicaciones',
           where: 'cod_orden = ? AND cod_productor = ?',
@@ -268,13 +238,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       _itemsRecetaTemporal.clear();
       for (var it in itemsParaCargar) {
         final double dMaq = double.tryParse(it['dosis_maq']?.toString() ?? '0') ?? 0.0;
+        final String met = (it['metodo_dosis'] ?? 'DOSIS_100').toString();
         _itemsRecetaTemporal.add({
           'cod_producto': it['cod_producto'] ?? it['ID_Insumos'] ?? 0,
           'producto': it['producto'] ?? it['Descripcion1'] ?? 'Insumo',
           'rubro': it['rubro'] ?? 'General',
+          'metodo_dosis': met,
+          'dosis_valor': it['dosis_100']?.toString() ?? '0',
           'dosis_100': it['dosis_100']?.toString() ?? '0',
-          'dosis_entrada': it['dosis_entrada'] ?? it['dosis_100']?.toString() ?? '0',
-          'modalidad_dosis': it['modalidad_dosis'] ?? 'DOSIS_100',
           'dosis_maq': dMaq,
           'tc': it['tc'] ?? it['T_C'] ?? 0,
           'ti': it['ti'] ?? it['TRI'] ?? 0,
@@ -287,9 +258,44 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     setState(() => _cargando = false);
   }
 
+  Future<void> _recargarChacrasDisponibles() async {
+    final db = await DatabaseHelper.instance.database;
+
+    final resChacras = await db.rawQuery('''
+      SELECT DISTINCT chacra 
+      FROM inventario_plantacion 
+      WHERE cod_productor = ? AND chacra IS NOT NULL AND TRIM(chacra) != '' 
+      ORDER BY chacra ASC
+    ''', [widget.codProductor]);
+
+    final Set<String> lista = resChacras.map((e) => e['chacra'].toString().trim()).toSet();
+
+    final resChacrasCuadros = await db.rawQuery('''
+      SELECT DISTINCT chacra 
+      FROM cuadros 
+      WHERE cod_productor = ? AND chacra IS NOT NULL AND TRIM(chacra) != '' 
+      ORDER BY chacra ASC
+    ''', [widget.codProductor]);
+
+    for (var r in resChacrasCuadros) {
+      final ch = r['chacra']?.toString().trim();
+      if (ch != null && ch.isNotEmpty) lista.add(ch);
+    }
+
+    final ordenadas = lista.toList()..sort();
+
+    setState(() {
+      _chacrasDisponibles = ordenadas;
+      if (_chacraSeleccionada == null && _chacrasDisponibles.isNotEmpty) {
+        _chacraSeleccionada = _chacrasDisponibles.first;
+      }
+    });
+  }
+
   Future<void> _recargarCatalogoInsumos() async {
     final db = await DatabaseHelper.instance.database;
-    final res = await db.rawQuery('''
+
+    final resInsumos = await db.rawQuery('''
       SELECT * FROM catalogo_insumos 
       WHERE rubro IN (
         SELECT nombre FROM rubros_insumos WHERE macro_rubro = 'PRODUCTOS'
@@ -297,8 +303,17 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       AND (Mostrar = 1 OR Mostrar IS NULL)
       ORDER BY Descripcion1 ASC
     ''');
+
+    final resRubros = await db.rawQuery('''
+      SELECT DISTINCT nombre FROM rubros_insumos 
+      WHERE macro_rubro = 'PRODUCTOS' AND nombre IS NOT NULL AND TRIM(nombre) != ''
+      ORDER BY nombre ASC
+    ''');
+
     setState(() {
-      _catalogoInsumos = res;
+      _catalogoInsumos = resInsumos;
+      _rubrosInsumosDisponibles =
+          resRubros.map((e) => e['nombre'].toString().trim().toUpperCase()).toList();
     });
   }
 
@@ -404,35 +419,38 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     });
   }
 
-  void _calcularDosisMaquina(String valorEntrada) {
-    final double valor = double.tryParse(valorEntrada.replaceAll(',', '.').trim()) ?? 0.0;
+  void _calcularDosisMaquina(String valor) {
+    final double valorNum = double.tryParse(valor.replaceAll(',', '.').trim()) ?? 0.0;
     final double volCaldoHa =
-        double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+        double.tryParse(_volumenHaController.text.replaceAll(',', '.').trim()) ?? 1000.0;
+
+    double calculada = 0.0;
+    if (_metodoDosis == "DOSIS_100") {
+      // Dosis cada 100 litros -> para tanque de 2000 L son 20 partes de 100
+      final double factorVolumen = _capacidadMaquinaLitros / 100.0;
+      calculada = valorNum * factorVolumen;
+    } else {
+      // Dosis por hectárea -> cuántas hectáreas cubre la máquina de 2000 L
+      final double haPorMaquina = volCaldoHa > 0 ? (_capacidadMaquinaLitros / volCaldoHa) : 2.0;
+      calculada = valorNum * haPorMaquina;
+    }
 
     setState(() {
-      if (_modalidadDosis == "DOSIS_100") {
-        final double factor = _capacidadMaquinaLitros / 100.0;
-        _dosisMaquinaCalculada = valor * factor;
-      } else {
-        if (volCaldoHa > 0) {
-          final double hectareasPorMaquina = _capacidadMaquinaLitros / volCaldoHa;
-          _dosisMaquinaCalculada = valor * hectareasPorMaquina;
-        } else {
-          _dosisMaquinaCalculada = 0.0;
-        }
-      }
+      _dosisMaquinaCalculada = calculada;
       _dosisMaquinaController.text = _dosisMaquinaCalculada.toStringAsFixed(2);
     });
   }
 
-  void _mostrarModalNuevoInsumoCatalogo() {
+  // ===========================================================================
+  // MODAL 1: NUEVA CHACRA / CUARTEL
+  // ===========================================================================
+  void _mostrarModalNuevaChacra() {
     final fKey = GlobalKey<FormState>();
-    final nombreCtrl = TextEditingController();
-    final activoCtrl = TextEditingController();
-    final concentracionCtrl = TextEditingController();
-    final tcCtrl = TextEditingController(text: "7");
-    final tiCtrl = TextEditingController(text: "24");
-    String rubroSel = "AGROQUIMICOS";
+    final nombreChacraCtrl = TextEditingController();
+    final primerCuadroCtrl = TextEditingController(text: "1");
+    final supHaCtrl = TextEditingController(text: "5.0");
+    final variedadCtrl = TextEditingController(text: "Gala");
+    final cultivoCtrl = TextEditingController(text: "Manzano");
 
     showModalBottomSheet(
       context: context,
@@ -440,7 +458,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) {
         return Container(
-          height: MediaQuery.of(ctx).size.height * 0.85,
           decoration: const BoxDecoration(
             color: AgroTheme.colorSurface,
             borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -454,6 +471,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           child: Form(
             key: fKey,
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Center(
@@ -461,96 +479,96 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                     width: 38,
                     height: 4,
                     decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2)),
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 14),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      "Nuevo Insumo al Catálogo",
-                      style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: AgroTheme.colorText),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            "Nueva Chacra del Productor",
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16.5,
+                              color: AgroTheme.colorText,
+                            ),
+                          ),
+                          Text(
+                            widget.nombreProductor,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              color: AgroTheme.colorTextSecondary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () => Navigator.pop(ctx)),
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
                   ],
                 ),
                 const Divider(color: AgroTheme.colorBorder),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      children: [
-                        TextFormField(
-                          controller: nombreCtrl,
-                          decoration: _inputDecoration(
-                              "Nombre Comercial del Producto (Ej: Coragen)"),
-                          validator: (v) =>
-                              v == null || v.trim().isEmpty ? "Obligatorio" : null,
-                        ),
-                        const SizedBox(height: 12),
-                        DropdownButtonFormField<String>(
-                          value: rubroSel,
-                          decoration: _inputDecoration("Rubro / Clasificación"),
-                          items: const [
-                            DropdownMenuItem(
-                                value: "AGROQUIMICOS",
-                                child: Text("Agroquímico (Insecticida / Fungicida)")),
-                            DropdownMenuItem(
-                                value: "FERTILIZANTES",
-                                child: Text("Fertilizante Foliar")),
-                            DropdownMenuItem(
-                                value: "HERBICIDAS", child: Text("Herbicida")),
-                            DropdownMenuItem(
-                                value: "COADYUVANTES",
-                                child: Text("Coadyuvante / Aceite")),
-                          ],
-                          onChanged: (v) => rubroSel = v ?? "AGROQUIMICOS",
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          controller: activoCtrl,
-                          decoration: _inputDecoration(
-                              "Principio Activo (Ej: Clorantraniliprole)"),
-                        ),
-                        const SizedBox(height: 12),
-                        TextFormField(
-                          controller: concentracionCtrl,
-                          decoration: _inputDecoration(
-                              "Concentración (Ej: 20% SC)"),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                controller: tcCtrl,
-                                keyboardType: TextInputType.number,
-                                decoration: _inputDecoration(
-                                    "Tiempo Carencia (Días)"),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: TextFormField(
-                                controller: tiCtrl,
-                                keyboardType: TextInputType.number,
-                                decoration: _inputDecoration(
-                                    "Tiempo Reingreso (Horas)"),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: nombreChacraCtrl,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: _inputDecoration("Nombre de la Chacra (Ej: Chacra Norte / Lote 12)"),
+                  validator: (v) =>
+                      v == null || v.trim().isEmpty ? "Ingresá el nombre de la chacra" : null,
                 ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: primerCuadroCtrl,
+                        decoration: _inputDecoration("Cuadro Inicial (Ej: 1)"),
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextFormField(
+                        controller: supHaCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: _inputDecoration("Superficie (Ha)"),
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: cultivoCtrl,
+                        decoration: _inputDecoration("Cultivo (Ej: Manzano)"),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextFormField(
+                        controller: variedadCtrl,
+                        decoration: _inputDecoration("Variedad (Ej: Gala / Williams)"),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
                   height: 48,
@@ -559,48 +577,89 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       if (!fKey.currentState!.validate()) return;
                       final db = await DatabaseHelper.instance.database;
 
-                      final int sigId = await DatabaseHelper.instance
-                          .obtenerSiguienteId('catalogo_insumos', 'ID_Insumos');
+                      final String nombreChacra = nombreChacraCtrl.text.trim();
+                      final String nombreCuadro = primerCuadroCtrl.text.trim();
+                      final double supHa =
+                          double.tryParse(supHaCtrl.text.replaceAll(',', '.').trim()) ?? 0.0;
+                      final String cultivo = cultivoCtrl.text.trim();
+                      final String variedad = variedadCtrl.text.trim();
 
-                      final rowNuevo = {
-                        'ID_Insumos': sigId,
-                        'rubro': rubroSel,
-                        'Descripcion1': nombreCtrl.text.trim(),
-                        'Descripcion2': activoCtrl.text.trim(),
-                        'principio_activo': activoCtrl.text.trim(),
-                        'Concentracion': concentracionCtrl.text.trim(),
-                        'T_C': int.tryParse(tcCtrl.text.trim()) ?? 0,
-                        'TRI': int.tryParse(tiCtrl.text.trim()) ?? 0,
-                        'Mostrar': 1,
-                        'stock_real': 0,
+                      final int sigInvId = await DatabaseHelper.instance
+                          .obtenerSiguienteId('inventario_plantacion', 'id');
+                      final int sigCuadroId = await DatabaseHelper.instance
+                          .obtenerSiguienteId('cuadros', 'cod_cuadro');
+
+                      final rowInventario = {
+                        'id': sigInvId,
+                        'cod_productor': widget.codProductor,
+                        'productor': widget.nombreProductor,
+                        'chacra': nombreChacra,
+                        'cod_cuadro': sigCuadroId,
+                        'cuadro': nombreCuadro,
+                        'cultivo': cultivo,
+                        'variedad': variedad,
+                        'ha': supHa,
+                        'ano_plantacion': DateTime.now().year,
+                        'plantas': 0,
+                        'marco_plantacion': 0,
+                        'up': '',
+                        'dist_arbol': 0.0,
+                        'dist_fila': 0.0,
+                        'orientacion': '',
+                        'sitema_riego': 'Goteo',
+                        'sistema_def': 'Malla',
                       };
 
-                      await db.insert('catalogo_insumos', rowNuevo);
+                      final rowCuadro = {
+                        'cod_cuadro': sigCuadroId,
+                        'cod_productor': widget.codProductor,
+                        'productor': widget.nombreProductor,
+                        'chacra': nombreChacra,
+                        'cuadro': nombreCuadro,
+                        'sitema_riego': 'Goteo',
+                        'sistema_def': 'Malla',
+                        'ubicacion': '',
+                        'sup': supHa,
+                      };
+
+                      await db.insert('inventario_plantacion', rowInventario);
+                      await db.insert('cuadros', rowCuadro);
+
                       try {
                         await Supabase.instance.client
-                            .from('catalogo_insumos')
-                            .insert(rowNuevo);
-                      } catch (_) {}
-
-                      await _recargarCatalogoInsumos();
-
-                      if (mounted) {
-                        setState(() {
-                          _idProductoSeleccionado = sigId.toString();
-                        });
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              backgroundColor: AgroTheme.colorAccent,
-                              content: Text('Insumo agregado al catálogo')),
-                        );
+                            .from('inventario_plantacion')
+                            .insert(rowInventario);
+                        await Supabase.instance.client.from('cuadros').insert(rowCuadro);
+                      } catch (e) {
+                        debugPrint("Aviso sync chacra: $e");
                       }
+
+                      if (!mounted) return;
+                      Navigator.pop(ctx);
+
+                      await _recargarChacrasDisponibles();
+                      setState(() {
+                        _chacraSeleccionada = nombreChacra;
+                      });
+                      await _cargarCuadrosDeInventario(nombreChacra);
+
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          backgroundColor: AgroTheme.colorAccent,
+                          content: Text("Chacra '$nombreChacra' creada exitosamente"),
+                        ),
+                      );
                     },
                     child: const Center(
-                      child: Text("Guardar Insumo",
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800)),
+                      child: Text(
+                        "Guardar Chacra",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -612,20 +671,448 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     );
   }
 
+  // ===========================================================================
+  // MODAL 2: NUEVO INSUMO AL CATÁLOGO
+  // ===========================================================================
+  void _mostrarModalNuevoRubroRapido(Function(String) onCreado) {
+    final formKey = GlobalKey<FormState>();
+    final nombreCtrl = TextEditingController();
+    String macroRubro = "PRODUCTOS";
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: AgroTheme.colorSurface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Nuevo Rubro de Insumo",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16.5,
+                            color: AgroTheme.colorText,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const Divider(color: AgroTheme.colorBorder),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Text("PRODUCTOS"),
+                            selected: macroRubro == "PRODUCTOS",
+                            selectedColor: const Color(0xFFE8F5E9),
+                            labelStyle: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              color: macroRubro == "PRODUCTOS"
+                                  ? const Color(0xFF2E7D32)
+                                  : AgroTheme.colorTextSecondary,
+                            ),
+                            backgroundColor: AgroTheme.colorBg,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: BorderSide(
+                                color: macroRubro == "PRODUCTOS"
+                                    ? const Color(0xFFA5D6A7)
+                                    : AgroTheme.colorBorder,
+                              ),
+                            ),
+                            onSelected: (val) {
+                              if (val) setModalState(() => macroRubro = "PRODUCTOS");
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ChoiceChip(
+                            label: const Text("INSUMOS VARIOS"),
+                            selected: macroRubro == "INSUMOS VARIOS",
+                            selectedColor: const Color(0xFFFFF8E1),
+                            labelStyle: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              color: macroRubro == "INSUMOS VARIOS"
+                                  ? const Color(0xFF8A6A1E)
+                                  : AgroTheme.colorTextSecondary,
+                            ),
+                            backgroundColor: AgroTheme.colorBg,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                              side: BorderSide(
+                                color: macroRubro == "INSUMOS VARIOS"
+                                    ? const Color(0xFFFFE082)
+                                    : AgroTheme.colorBorder,
+                              ),
+                            ),
+                            onSelected: (val) {
+                              if (val) setModalState(() => macroRubro = "INSUMOS VARIOS");
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: nombreCtrl,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: _inputDecoration("Nombre del Rubro (Ej: BIOESTIMULANTES)"),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Ingresá un nombre" : null,
+                    ),
+                    const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: SoftButton(
+                        onTap: () async {
+                          if (!formKey.currentState!.validate()) return;
+                          final db = await DatabaseHelper.instance.database;
+
+                          final int sigCodigo = await DatabaseHelper.instance
+                              .obtenerSiguienteId('rubros_insumos', 'codigo');
+                          final resRubro = await db.rawQuery(
+                            'SELECT MAX(CAST(cod_rubro AS INTEGER)) as max_cr FROM rubros_insumos WHERE macro_rubro = ?',
+                            [macroRubro],
+                          );
+                          final int maxCr = (resRubro.first['max_cr'] as int?) ?? 0;
+                          final int sigCodRubro = maxCr + 1;
+
+                          final String nuevoNom = nombreCtrl.text.trim().toUpperCase();
+                          final rowRubro = {
+                            'codigo': sigCodigo,
+                            'cod_rubro': sigCodRubro,
+                            'nombre': nuevoNom,
+                            'macro_rubro': macroRubro,
+                          };
+
+                          await db.insert('rubros_insumos', rowRubro);
+
+                          try {
+                            await Supabase.instance.client
+                                .from('rubros_insumos')
+                                .insert(rowRubro);
+                          } catch (e) {
+                            debugPrint("Aviso sync rubro: $e");
+                          }
+
+                          await _recargarCatalogoInsumos();
+                          if (!mounted) return;
+                          Navigator.pop(ctx);
+                          onCreado(nuevoNom);
+                        },
+                        child: const Center(
+                          child: Text(
+                            "Guardar Rubro",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _mostrarModalNuevoInsumoCatalogo() {
+    final fKey = GlobalKey<FormState>();
+    final nombreCtrl = TextEditingController();
+    final activoCtrl = TextEditingController();
+    final concentracionCtrl = TextEditingController();
+    final tcCtrl = TextEditingController(text: "7");
+    final tiCtrl = TextEditingController(text: "24");
+    final stockCtrl = TextEditingController(text: "0");
+
+    List<String> opcionesRubros = _rubrosInsumosDisponibles.isNotEmpty
+        ? _rubrosInsumosDisponibles
+        : ["AGROQUIMICOS", "FERTILIZANTES", "HERBICIDAS", "COADYUVANTES"];
+
+    String rubroSel = opcionesRubros.first;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(ctx).size.height * 0.88,
+              decoration: const BoxDecoration(
+                color: AgroTheme.colorSurface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: EdgeInsets.only(
+                top: 20,
+                left: 20,
+                right: 20,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: Form(
+                key: fKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 38,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          "Nuevo Insumo al Catálogo",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16.5,
+                            color: AgroTheme.colorText,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                    const Divider(color: AgroTheme.colorBorder),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        child: Column(
+                          children: [
+                            TextFormField(
+                              controller: nombreCtrl,
+                              decoration: _inputDecoration("Nombre Comercial (Ej: Coragen / Captan)"),
+                              validator: (v) =>
+                                  v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: rubroSel,
+                                    decoration: _inputDecoration("Rubro / Clasificación"),
+                                    items: opcionesRubros.map((r) {
+                                      return DropdownMenuItem<String>(
+                                        value: r,
+                                        child: Text(r, overflow: TextOverflow.ellipsis),
+                                      );
+                                    }).toList(),
+                                    onChanged: (v) {
+                                      if (v != null) setModalState(() => rubroSel = v);
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  height: 48,
+                                  width: 48,
+                                  decoration: BoxDecoration(
+                                    color: AgroTheme.colorBg,
+                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                    border: Border.all(color: AgroTheme.colorBorder),
+                                  ),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.add_rounded,
+                                        color: AgroTheme.colorAccentDark),
+                                    tooltip: "Crear nuevo rubro",
+                                    onPressed: () {
+                                      _mostrarModalNuevoRubroRapido((nuevoR) {
+                                        setModalState(() {
+                                          if (!opcionesRubros.contains(nuevoR)) {
+                                            opcionesRubros.add(nuevoR);
+                                          }
+                                          rubroSel = nuevoR;
+                                        });
+                                      });
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: activoCtrl,
+                              decoration: _inputDecoration("Principio Activo (Ej: Clorantraniliprole)"),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: concentracionCtrl,
+                                    decoration: _inputDecoration("Concentración (Ej: 20% SC)"),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: stockCtrl,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: _inputDecoration("Stock Inicial"),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: tcCtrl,
+                                    keyboardType: TextInputType.number,
+                                    decoration: _inputDecoration("T. Carencia (Días)"),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextFormField(
+                                    controller: tiCtrl,
+                                    keyboardType: TextInputType.number,
+                                    decoration: _inputDecoration("T. Reingreso (Horas)"),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: SoftButton(
+                        onTap: () async {
+                          if (!fKey.currentState!.validate()) return;
+                          final db = await DatabaseHelper.instance.database;
+
+                          final int sigId = await DatabaseHelper.instance
+                              .obtenerSiguienteId('catalogo_insumos', 'ID_Insumos');
+
+                          final rowNuevo = {
+                            'ID_Insumos': sigId,
+                            'rubro': rubroSel,
+                            'Descripcion1': nombreCtrl.text.trim(),
+                            'Descripcion2': activoCtrl.text.trim(),
+                            'principio_activo': activoCtrl.text.trim(),
+                            'Concentracion': concentracionCtrl.text.trim(),
+                            'T_C': int.tryParse(tcCtrl.text.trim()) ?? 0,
+                            'TRI': int.tryParse(tiCtrl.text.trim()) ?? 0,
+                            'Mostrar': 1,
+                            'stock_real': int.tryParse(stockCtrl.text.trim()) ?? 0,
+                          };
+
+                          await db.insert('catalogo_insumos', rowNuevo);
+                          try {
+                            await Supabase.instance.client
+                                .from('catalogo_insumos')
+                                .insert(rowNuevo);
+                          } catch (_) {}
+
+                          await _recargarCatalogoInsumos();
+
+                          if (!mounted) return;
+                          setState(() {
+                            _idProductoSeleccionado = sigId.toString();
+                          });
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              backgroundColor: AgroTheme.colorAccent,
+                              content: Text('Insumo agregado al catálogo'),
+                            ),
+                          );
+                        },
+                        child: const Center(
+                          child: Text(
+                            "Guardar Insumo",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _agregarProductoATabla() {
-    if (_idProductoSeleccionado == null ||
-        _idProductoSeleccionado!.trim().isEmpty) {
+    if (_idProductoSeleccionado == null || _idProductoSeleccionado!.trim().isEmpty) {
       _mostrarAlerta('Por favor, selecciona un insumo del catálogo.');
       return;
     }
 
     Map<String, dynamic> prodMap = {};
     for (var p in _catalogoInsumos) {
-      final String idActual = (p['cod_producto'] ??
-              p['ID_Insumos'] ??
-              p['id'] ??
-              p['Descripcion1'] ??
-              '')
+      final String idActual = (p['cod_producto'] ?? p['ID_Insumos'] ?? p['id'] ?? p['Descripcion1'] ?? '')
           .toString()
           .trim();
       if (idActual == _idProductoSeleccionado!.trim()) {
@@ -639,50 +1126,50 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       return;
     }
 
-    final cleanEntrada =
-        _dosisEntradaController.text.trim().replaceAll(',', '.');
-    final double dosisEntradaNum = double.tryParse(cleanEntrada) ?? 0.0;
+    final cleanInput = _dosisInputController.text.trim().replaceAll(',', '.');
+    final double dosisInput = double.tryParse(cleanInput) ?? 0.0;
 
-    if (dosisEntradaNum <= 0) {
-      _mostrarAlerta('Ingresa una dosis válida mayor a 0.');
+    if (dosisInput <= 0) {
+      _mostrarAlerta('Ingresa una dosis mayor a 0.');
       return;
     }
 
     final double volCaldoHa =
-        double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ?? 1000.0;
+        double.tryParse(_volumenHaController.text.replaceAll(',', '.').trim()) ?? 1000.0;
+
     double dosis100Final = 0.0;
+    double dosisMaqFinal = 0.0;
 
-    if (_modalidadDosis == "DOSIS_100") {
-      dosis100Final = dosisEntradaNum;
+    if (_metodoDosis == "DOSIS_100") {
+      dosis100Final = dosisInput;
+      dosisMaqFinal = double.tryParse(
+              _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
+          (dosisInput * (_capacidadMaquinaLitros / 100.0));
     } else {
-      dosis100Final =
-          volCaldoHa > 0 ? (dosisEntradaNum / (volCaldoHa / 100.0)) : dosisEntradaNum;
+      // Dosis por Ha -> convertimos proporcionalmente a dosis cada 100L para registro estándar
+      dosis100Final = volCaldoHa > 0 ? ((dosisInput / volCaldoHa) * 100.0) : dosisInput;
+      final double haPorMaquina = volCaldoHa > 0 ? (_capacidadMaquinaLitros / volCaldoHa) : 2.0;
+      dosisMaqFinal = double.tryParse(
+              _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
+          (dosisInput * haPorMaquina);
     }
-
-    final double dosisMaqNum = double.tryParse(
-            _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
-        _dosisMaquinaCalculada;
 
     setState(() {
       _itemsRecetaTemporal.add({
-        'cod_producto': prodMap['cod_producto'] ??
-            prodMap['ID_Insumos'] ??
-            prodMap['id'] ??
-            0,
-        'producto':
-            prodMap['Descripcion1'] ?? prodMap['descripcion'] ?? 'Insumo',
+        'cod_producto': prodMap['cod_producto'] ?? prodMap['ID_Insumos'] ?? prodMap['id'] ?? 0,
+        'producto': prodMap['Descripcion1'] ?? prodMap['descripcion'] ?? 'Insumo',
         'rubro': prodMap['rubro'] ?? 'General',
+        'metodo_dosis': _metodoDosis,
+        'dosis_valor': cleanInput,
         'dosis_100': dosis100Final.toStringAsFixed(2),
-        'dosis_entrada': cleanEntrada,
-        'modalidad_dosis': _modalidadDosis,
-        'dosis_maq': dosisMaqNum,
+        'dosis_maq': dosisMaqFinal,
         'tc': prodMap['T_C'] ?? prodMap['tc'] ?? 0,
         'ti': prodMap['TRI'] ?? prodMap['ti'] ?? 0,
         'orden_aplic': _itemsRecetaTemporal.length + 1,
       });
 
       _idProductoSeleccionado = null;
-      _dosisEntradaController.clear();
+      _dosisInputController.clear();
       _dosisMaquinaController.clear();
       _dosisMaquinaCalculada = 0.0;
     });
@@ -741,7 +1228,6 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           double.tryParse(_volumenHaController.text.replaceAll(',', '.')) ??
               1000.0;
 
-      // 💡 PRESERVAR IDENTIFICADOR EN EDICIÓN (NO RE-GENERAR ID)
       final int ordenIdFinal = _esEdicion
           ? _numeroOrden
           : await DatabaseHelper.instance
@@ -821,7 +1307,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
 
-      Supabase.instance.client.from('parametros_aplic').insert({
+      Supabase.instance.client.from('parametros_aplic').upsert({
+        'cod_orden': ordenIdFinal,
+        'cod_receta': ordenIdFinal,
         'vel_viento': rowParametros['vel_viento'],
         'Temperatura': rowParametros['Temperatura'],
         'Tamano_gota': rowParametros['Tamano_gota'],
@@ -887,20 +1375,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         ),
       ),
       body: _cargando
-          ? const Center(
-              child: CircularProgressIndicator(color: AgroTheme.colorAccent))
+          ? const Center(child: CircularProgressIndicator(color: AgroTheme.colorAccent))
           : SafeArea(
               child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Form(
                   key: _formKey,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // SECCIÓN 1: CABECERA
-                      _buildSeccionHeader(
-                          "1. Datos de Cabecera", Icons.event_note_rounded),
+                      _buildSeccionHeader("1. Datos de Cabecera", Icons.event_note_rounded),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -916,49 +1400,39 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                         fontSize: 13,
                                         color: AgroTheme.colorTextSecondary)),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 6),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                      color: AgroTheme.colorBg,
-                                      borderRadius: BorderRadius.circular(8)),
+                                      color: AgroTheme.colorBg, borderRadius: BorderRadius.circular(8)),
                                   child: Text(_fecha,
                                       style: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          color: AgroTheme.colorText)),
+                                          fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 14),
                             DropdownButtonFormField<String>(
                               value: _tipoAplicacionSeleccionado,
-                              decoration:
-                                  _inputDecoration("Tipo de Aplicación"),
+                              decoration: _inputDecoration("Tipo de Aplicación"),
                               items: _tiposAplicacion.map((tipo) {
-                                return DropdownMenuItem<String>(
-                                    value: tipo, child: Text(tipo));
+                                return DropdownMenuItem<String>(value: tipo, child: Text(tipo));
                               }).toList(),
                               onChanged: (val) {
                                 if (val != null) {
-                                  setState(
-                                      () => _tipoAplicacionSeleccionado = val);
+                                  setState(() => _tipoAplicacionSeleccionado = val);
                                   _cargarMotivosPorTipo(val);
                                 }
                               },
                             ),
                             const SizedBox(height: 14),
                             DropdownButtonFormField<String>(
-                              value: _esMotivoPersonalizado
-                                  ? "__OTRO__"
-                                  : _motivoSeleccionado,
+                              value: _esMotivoPersonalizado ? "__OTRO__" : _motivoSeleccionado,
                               isExpanded: true,
-                              decoration: _inputDecoration(
-                                  "Motivo Técnico de Aplicación"),
+                              decoration: _inputDecoration("Motivo Técnico de Aplicación"),
                               items: [
                                 ..._motivosDisponibles.map((mot) {
                                   return DropdownMenuItem<String>(
                                     value: mot,
-                                    child: Text(mot,
-                                        overflow: TextOverflow.ellipsis),
+                                    child: Text(mot, overflow: TextOverflow.ellipsis),
                                   );
                                 }),
                                 const DropdownMenuItem<String>(
@@ -984,11 +1458,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               const SizedBox(height: 10),
                               TextFormField(
                                 controller: _motivoCustomController,
-                                decoration: _inputDecoration(
-                                    "Escribe el nuevo motivo técnico..."),
+                                decoration: _inputDecoration("Escribe el nuevo motivo técnico..."),
                                 validator: (val) {
-                                  if (_esMotivoPersonalizado &&
-                                      (val == null || val.trim().isEmpty)) {
+                                  if (_esMotivoPersonalizado && (val == null || val.trim().isEmpty)) {
                                     return "Ingresá el motivo técnico";
                                   }
                                   return null;
@@ -1001,8 +1473,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _momentoController,
-                                    decoration: _inputDecoration(
-                                        "Momento (ej. Fruto 10mm)"),
+                                    decoration: _inputDecoration("Momento (ej. Fruto 10mm)"),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -1010,21 +1481,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   child: TextFormField(
                                     controller: _volumenHaController,
                                     keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration(
-                                        "Volumen Caldo (L/Ha)"),
+                                    decoration: _inputDecoration("Volumen Caldo (L/Ha)"),
                                     validator: (val) =>
-                                        val == null || val.isEmpty
-                                            ? "Obligatorio"
-                                            : null,
+                                        val == null || val.isEmpty ? "Obligatorio" : null,
                                     onChanged: (v) {
                                       setState(() {
                                         _paramCaudalCtrl.text = "$v L/Ha";
-                                        if (_dosisEntradaController
-                                            .text.isNotEmpty) {
-                                          _calcularDosisMaquina(
-                                              _dosisEntradaController.text);
-                                        }
                                       });
+                                      if (_dosisInputController.text.isNotEmpty) {
+                                        _calcularDosisMaquina(_dosisInputController.text);
+                                      }
                                     },
                                   ),
                                 ),
@@ -1035,9 +1501,8 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // SECCIÓN 2: CUADROS Y CHACRA
-                      _buildSeccionHeader(
-                          "2. Ubicación y Cuadros", Icons.map_outlined),
+                      // SECCIÓN 2: UBICACIÓN Y CUADROS INMOVILIZADOS
+                      _buildSeccionHeader("2. Ubicación y Cuarteles Asignados", Icons.map_outlined),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -1045,86 +1510,65 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            DropdownButtonFormField<String>(
-                              value: _chacraSeleccionada,
-                              decoration:
-                                  _inputDecoration("Seleccionar Chacra"),
-                              items: _chacrasDisponibles.map((chacra) {
-                                return DropdownMenuItem<String>(
-                                    value: chacra, child: Text("Chacra: $chacra"));
-                              }).toList(),
-                              onChanged: (nuevaChacra) {
-                                if (nuevaChacra != null) {
-                                  setState(
-                                      () => _chacraSeleccionada = nuevaChacra);
-                                  _cargarCuadrosDeInventario(nuevaChacra);
-                                }
-                              },
-                            ),
-                            const SizedBox(height: 16),
-                            if (_cultivosEnChacra.isNotEmpty) ...[
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text("Filtrar por Cultivo:",
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w800,
-                                          color:
-                                              AgroTheme.colorTextSecondary)),
-                                  InkWell(
-                                    onTap: () {
-                                      setState(() {
-                                        if (_cultivosFiltroActivos.length ==
-                                            _cultivosEnChacra.length) {
-                                          _cultivosFiltroActivos.clear();
-                                        } else {
-                                          _cultivosFiltroActivos
-                                              .addAll(_cultivosEnChacra);
-                                        }
-                                      });
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: _chacraSeleccionada,
+                                    decoration: _inputDecoration("Seleccionar Chacra"),
+                                    items: _chacrasDisponibles.map((chacra) {
+                                      return DropdownMenuItem<String>(
+                                          value: chacra, child: Text("Chacra: $chacra"));
+                                    }).toList(),
+                                    onChanged: (nuevaChacra) {
+                                      if (nuevaChacra != null) {
+                                        setState(() => _chacraSeleccionada = nuevaChacra);
+                                        _cargarCuadrosDeInventario(nuevaChacra);
+                                      }
                                     },
-                                    child: Text(
-                                      _cultivosFiltroActivos.length ==
-                                              _cultivosEnChacra.length
-                                          ? "Deseleccionar todos"
-                                          : "Todos",
-                                      style: const TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w700,
-                                          color: AgroTheme.colorAccentDark),
-                                    ),
                                   ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  height: 48,
+                                  width: 48,
+                                  decoration: BoxDecoration(
+                                    color: AgroTheme.colorAccentDark,
+                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                  ),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.add_location_alt_outlined,
+                                        color: Colors.white, size: 22),
+                                    tooltip: "Crear nueva chacra para este productor",
+                                    onPressed: _mostrarModalNuevaChacra,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+
+                            if (_cultivosEnChacra.isNotEmpty) ...[
                               Wrap(
-                                spacing: 8,
+                                spacing: 6,
                                 runSpacing: 6,
                                 children: _cultivosEnChacra.map((cul) {
-                                  final isSel =
-                                      _cultivosFiltroActivos.contains(cul);
+                                  final isSel = _cultivosFiltroActivos.contains(cul);
                                   return FilterChip(
                                     label: Text(cul),
                                     selected: isSel,
-                                    selectedColor: AgroTheme.colorAccentDark,
-                                    checkmarkColor: Colors.white,
+                                    selectedColor: const Color(0xFFE8F5E9),
+                                    checkmarkColor: const Color(0xFF2E7D32),
                                     labelStyle: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: isSel
-                                          ? FontWeight.w800
-                                          : FontWeight.w600,
-                                      color: isSel
-                                          ? Colors.white
-                                          : AgroTheme.colorText,
+                                      fontSize: 11,
+                                      fontWeight: isSel ? FontWeight.w800 : FontWeight.w600,
+                                      color: isSel ? const Color(0xFF2E7D32) : AgroTheme.colorText,
                                     ),
                                     backgroundColor: AgroTheme.colorBg,
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
+                                      borderRadius: BorderRadius.circular(8),
                                       side: BorderSide(
                                           color: isSel
-                                              ? AgroTheme.colorAccentDark
+                                              ? const Color(0xFFA5D6A7)
                                               : AgroTheme.colorBorder),
                                     ),
                                     onSelected: (selected) {
@@ -1139,202 +1583,191 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   );
                                 }).toList(),
                               ),
-                              const SizedBox(height: 14),
-                              const Divider(
-                                  height: 1, color: AgroTheme.colorBorder),
                               const SizedBox(height: 12),
                             ],
-                            Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  "Cuadros (${_cuadrosSeleccionados.length}/${cuadrosParaMostrar.length} selec.)",
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 13,
-                                      color: AgroTheme.colorText),
-                                ),
-                                if (cuadrosParaMostrar.isNotEmpty)
-                                  InkWell(
-                                    onTap: _seleccionarTodosCuadrosVisibles,
-                                    child: Text(
-                                      cuadrosParaMostrar.every((c) =>
-                                              _cuadrosSeleccionados.contains(
-                                                  c['cuadro']?.toString() ??
-                                                      ''))
-                                          ? "Deseleccionar visibles"
-                                          : "Seleccionar visibles",
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: AgroTheme.colorAccentDark),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            if (cuadrosParaMostrar.isEmpty)
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                width: double.infinity,
-                                decoration: BoxDecoration(
-                                  color: AgroTheme.colorBg,
-                                  borderRadius:
-                                      BorderRadius.circular(AgroTheme.radiusMd),
-                                ),
-                                child: const Center(
-                                  child: Text(
-                                    "No hay cuadros con los cultivos seleccionados.",
-                                    style: TextStyle(
-                                        fontSize: 12.5,
-                                        color: AgroTheme.colorTextSecondary),
-                                  ),
-                                ),
-                              )
-                            else ...[
-                              ListView.separated(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                itemCount: cuadrosParaMostrar.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 6),
-                                itemBuilder: (context, idx) {
-                                  final item = cuadrosParaMostrar[idx];
-                                  final String cuadroNom =
-                                      item['cuadro']?.toString() ?? 'S/N';
-                                  final double sup = double.tryParse(
-                                          item['ha']?.toString() ?? '0') ??
-                                      0.0;
-                                  final String variedad =
-                                      item['variedad']?.toString() ?? 'S/D';
-                                  final String cultivo =
-                                      item['cultivo']?.toString() ?? '';
-                                  final bool isSelected =
-                                      _cuadrosSeleccionados.contains(cuadroNom);
 
-                                  return InkWell(
-                                    onTap: () => _alternarSeleccionCuadro(
-                                        cuadroNom, sup),
-                                    borderRadius: BorderRadius.circular(
-                                        AgroTheme.radiusMd),
-                                    child: AnimatedContainer(
-                                      duration:
-                                          const Duration(milliseconds: 120),
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: isSelected
-                                            ? AgroTheme.colorAccentSoft
-                                            : AgroTheme.colorSurface,
-                                        borderRadius: BorderRadius.circular(
-                                            AgroTheme.radiusMd),
-                                        border: Border.all(
-                                          color: isSelected
-                                              ? AgroTheme.colorAccent
-                                              : AgroTheme.colorBorder,
-                                          width: isSelected ? 1.4 : 1.0,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Icon(
-                                            isSelected
+                            // TABLA INMOVILIZADA
+                            Container(
+                              decoration: BoxDecoration(
+                                color: AgroTheme.colorSurface,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: AgroTheme.colorBorder),
+                              ),
+                              child: Column(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFF1F8E9),
+                                      borderRadius: BorderRadius.vertical(top: Radius.circular(9)),
+                                      border: Border(bottom: BorderSide(color: AgroTheme.colorBorder)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        InkWell(
+                                          onTap: _seleccionarTodosCuadrosVisibles,
+                                          child: Icon(
+                                            cuadrosParaMostrar.isNotEmpty &&
+                                                    cuadrosParaMostrar.every((c) =>
+                                                        _cuadrosSeleccionados.contains(
+                                                            c['cuadro']?.toString() ?? ''))
                                                 ? Icons.check_box_rounded
-                                                : Icons
-                                                    .check_box_outline_blank_rounded,
-                                            size: 20,
-                                            color: isSelected
-                                                ? AgroTheme.colorAccentDark
-                                                : AgroTheme
-                                                    .colorTextSecondary,
+                                                : Icons.check_box_outline_blank_rounded,
+                                            size: 19,
+                                            color: const Color(0xFF2E7D32),
                                           ),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            flex: 2,
-                                            child: Text(
-                                              "Cuadro $cuadroNom",
+                                        ),
+                                        const SizedBox(width: 10),
+                                        const Expanded(
+                                          flex: 2,
+                                          child: Text("CUADRO",
                                               style: TextStyle(
-                                                fontWeight: isSelected
-                                                    ? FontWeight.w800
-                                                    : FontWeight.w600,
-                                                fontSize: 13,
-                                                color: AgroTheme.colorText,
-                                              ),
-                                            ),
-                                          ),
-                                          Expanded(
-                                            flex: 2,
-                                            child: Text(
-                                              "${sup.toStringAsFixed(2)} Ha",
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Color(0xFF1B5E20))),
+                                        ),
+                                        const Expanded(
+                                          flex: 2,
+                                          child: Text("SUPERFICIE",
                                               textAlign: TextAlign.center,
                                               style: TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                                fontSize: 12.5,
-                                                color: isSelected
-                                                    ? AgroTheme.colorAccentDark
-                                                    : AgroTheme.colorText,
-                                              ),
-                                            ),
-                                          ),
-                                          Expanded(
-                                            flex: 3,
-                                            child: Text(
-                                              cultivo.isNotEmpty
-                                                  ? "$variedad ($cultivo)"
-                                                  : variedad,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Color(0xFF1B5E20))),
+                                        ),
+                                        const Expanded(
+                                          flex: 3,
+                                          child: Text("VARIEDAD",
                                               textAlign: TextAlign.right,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w500,
-                                                color: AgroTheme
-                                                    .colorTextSecondary,
-                                              ),
+                                              style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Color(0xFF1B5E20))),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    height: 180,
+                                    child: cuadrosParaMostrar.isEmpty
+                                        ? const Center(
+                                            child: Text(
+                                              "Sin cuadros en los filtros seleccionados",
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: AgroTheme.colorTextSecondary),
                                             ),
+                                          )
+                                        : ListView.separated(
+                                            physics: const BouncingScrollPhysics(),
+                                            itemCount: cuadrosParaMostrar.length,
+                                            separatorBuilder: (_, __) =>
+                                                const Divider(height: 1, color: AgroTheme.colorBorder),
+                                            itemBuilder: (context, idx) {
+                                              final item = cuadrosParaMostrar[idx];
+                                              final String cuadroNom = item['cuadro']?.toString() ?? 'S/N';
+                                              final double sup = double.tryParse(item['ha']?.toString() ?? '0') ?? 0.0;
+                                              final String variedad = item['variedad']?.toString() ?? 'S/D';
+                                              final String cultivo = item['cultivo']?.toString() ?? '';
+                                              final bool isSelected = _cuadrosSeleccionados.contains(cuadroNom);
+
+                                              return InkWell(
+                                                onTap: () => _alternarSeleccionCuadro(cuadroNom, sup),
+                                                child: Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                                                  color: isSelected ? const Color(0xFFE8F5E9).withOpacity(0.45) : Colors.transparent,
+                                                  child: Row(
+                                                    children: [
+                                                      Icon(
+                                                        isSelected
+                                                            ? Icons.check_box_rounded
+                                                            : Icons.check_box_outline_blank_rounded,
+                                                        size: 19,
+                                                        color: isSelected
+                                                            ? const Color(0xFF2E7D32)
+                                                            : AgroTheme.colorTextSecondary,
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      Expanded(
+                                                        flex: 2,
+                                                        child: Text(
+                                                          "Cuadro $cuadroNom",
+                                                          style: TextStyle(
+                                                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                                            fontSize: 12.5,
+                                                            color: AgroTheme.colorText,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      Expanded(
+                                                        flex: 2,
+                                                        child: Text(
+                                                          "${sup.toStringAsFixed(2)} Ha",
+                                                          textAlign: TextAlign.center,
+                                                          style: TextStyle(
+                                                            fontWeight: FontWeight.w700,
+                                                            fontSize: 12,
+                                                            color: isSelected ? const Color(0xFF2E7D32) : AgroTheme.colorText,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      Expanded(
+                                                        flex: 3,
+                                                        child: Text(
+                                                          cultivo.isNotEmpty ? "$variedad ($cultivo)" : variedad,
+                                                          textAlign: TextAlign.right,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: const TextStyle(
+                                                            fontSize: 11.5,
+                                                            fontWeight: FontWeight.w500,
+                                                            color: AgroTheme.colorTextSecondary,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              );
+                                            },
                                           ),
-                                        ],
-                                      ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFFFFF8E1),
+                                      borderRadius: BorderRadius.vertical(bottom: Radius.circular(9)),
+                                      border: Border(top: BorderSide(color: Color(0xFFFFE082))),
                                     ),
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 10),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: AgroTheme.colorGoldSoft,
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text("Superficie Total a Tratar:",
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: Color(0xFF8A6A1E))),
-                                    Text(
-                                      "${_superficieTotalSeleccionada.toStringAsFixed(2)} Ha",
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF8A6A1E)),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          "Cuadros: ${_cuadrosSeleccionados.length} seleccionados",
+                                          style: const TextStyle(
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF8A6A1E)),
+                                        ),
+                                        Text(
+                                          "Total: ${_superficieTotalSeleccionada.toStringAsFixed(2)} Ha",
+                                          style: const TextStyle(
+                                              fontSize: 12.5,
+                                              fontWeight: FontWeight.w800,
+                                              color: Color(0xFF8A6A1E)),
+                                        ),
+                                      ],
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
-                            ],
+                            ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 24),
 
-                      // SECCIÓN 3: RECETA FOLIAR
-                      _buildSeccionHeader("3. Confección de Receta Foliar",
-                          Icons.science_outlined),
+                      // SECCIÓN 3: CONFECCIÓN DE RECETA (+ SELECTOR DOSIS/HA O DOSIS/100)
+                      _buildSeccionHeader("3. Confección de Receta Foliar", Icons.science_outlined),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -1343,186 +1776,36 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "Modalidad de Dosificación:",
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: AgroTheme.colorTextSecondary,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.all(3),
-                                  decoration: BoxDecoration(
-                                    color: AgroTheme.colorBg,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                        color: AgroTheme.colorBorder),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      InkWell(
-                                        onTap: () {
-                                          setState(() {
-                                            _modalidadDosis = "DOSIS_100";
-                                            if (_dosisEntradaController
-                                                .text.isNotEmpty) {
-                                              _calcularDosisMaquina(
-                                                  _dosisEntradaController.text);
-                                            }
-                                          });
-                                        },
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 6),
-                                          decoration: BoxDecoration(
-                                            color: _modalidadDosis == "DOSIS_100"
-                                                ? AgroTheme.colorAccentDark
-                                                : Colors.transparent,
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                          ),
-                                          child: Text(
-                                            "Dosis / 100 L",
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: _modalidadDosis ==
-                                                      "DOSIS_100"
-                                                  ? Colors.white
-                                                  : AgroTheme
-                                                      .colorTextSecondary,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      InkWell(
-                                        onTap: () {
-                                          setState(() {
-                                            _modalidadDosis = "DOSIS_HA";
-                                            if (_dosisEntradaController
-                                                .text.isNotEmpty) {
-                                              _calcularDosisMaquina(
-                                                  _dosisEntradaController.text);
-                                            }
-                                          });
-                                        },
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 10, vertical: 6),
-                                          decoration: BoxDecoration(
-                                            color: _modalidadDosis == "DOSIS_HA"
-                                                ? AgroTheme.colorGold
-                                                : Colors.transparent,
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                          ),
-                                          child: Text(
-                                            "Dosis / Ha",
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w800,
-                                              color: _modalidadDosis ==
-                                                      "DOSIS_HA"
-                                                  ? Colors.white
-                                                  : AgroTheme
-                                                      .colorTextSecondary,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-
-                            Row(
                               children: [
                                 Expanded(
-                                  child: Builder(
-                                    builder: (context) {
-                                      final Map<String, Map<String, dynamic>>
-                                          insumosUnicos = {};
-                                      for (var prod in _catalogoInsumos) {
-                                        final String id = (prod['cod_producto'] ??
-                                                prod['ID_Insumos'] ??
-                                                prod['id'] ??
-                                                prod['Descripcion1'] ??
-                                                '')
-                                            .toString()
-                                            .trim();
-                                        if (id.isNotEmpty &&
-                                            !insumosUnicos.containsKey(id)) {
-                                          insumosUnicos[id] = prod;
-                                        }
-                                      }
+                                  child: DropdownButtonFormField<String>(
+                                    value: _idProductoSeleccionado,
+                                    isExpanded: true,
+                                    decoration: _inputDecoration("Buscar Insumo / Principio Activo"),
+                                    hint: const Text("Selecciona un insumo...",
+                                        style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary)),
+                                    items: _catalogoInsumos.map((prod) {
+                                      final String idProd = (prod['cod_producto'] ??
+                                              prod['ID_Insumos'] ??
+                                              prod['id'] ??
+                                              prod['Descripcion1'])
+                                          .toString()
+                                          .trim();
+                                      final String nombre = prod['Descripcion1'] ??
+                                          prod['descripcion'] ??
+                                          'Insumo';
+                                      final String rubro = prod['rubro'] ?? 'General';
 
-                                      final bool existeSeleccionado =
-                                          _idProductoSeleccionado != null &&
-                                              insumosUnicos.containsKey(
-                                                  _idProductoSeleccionado);
-                                      final String? valorSeguro =
-                                          existeSeleccionado
-                                              ? _idProductoSeleccionado
-                                              : null;
-
-                                      return DropdownButtonFormField<String>(
-                                        value: valorSeguro,
-                                        isExpanded: true,
-                                        decoration: _inputDecoration(
-                                            "Buscar Insumo / Principio Activo"),
-                                        hint: Text(
-                                          insumosUnicos.isEmpty
-                                              ? "Cargando catálogo..."
-                                              : "Selecciona un insumo...",
-                                          style: const TextStyle(
-                                              fontSize: 13,
-                                              color: AgroTheme
-                                                  .colorTextSecondary),
+                                      return DropdownMenuItem<String>(
+                                        value: idProd,
+                                        child: Text(
+                                          "$nombre ($rubro)",
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
                                         ),
-                                        items:
-                                            insumosUnicos.values.map((prod) {
-                                          final String idProd = (prod['cod_producto'] ??
-                                                  prod['ID_Insumos'] ??
-                                                  prod['id'] ??
-                                                  prod['Descripcion1'])
-                                              .toString()
-                                              .trim();
-                                          final String nombre =
-                                              prod['Descripcion1'] ??
-                                                  prod['descripcion'] ??
-                                                  'Insumo';
-                                          final String rubro =
-                                              prod['rubro'] ?? 'General';
-
-                                          return DropdownMenuItem<String>(
-                                            value: idProd,
-                                            child: Text(
-                                              "$nombre ($rubro)",
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 13),
-                                            ),
-                                          );
-                                        }).toList(),
-                                        onChanged: insumosUnicos.isEmpty
-                                            ? null
-                                            : (val) {
-                                                setState(() {
-                                                  _idProductoSeleccionado = val;
-                                                });
-                                              },
                                       );
-                                    },
+                                    }).toList(),
+                                    onChanged: (val) => setState(() => _idProductoSeleccionado = val),
                                   ),
                                 ),
                                 const SizedBox(width: 8),
@@ -1531,39 +1814,103 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   width: 48,
                                   decoration: BoxDecoration(
                                     color: AgroTheme.colorAccentDark,
-                                    borderRadius: BorderRadius.circular(
-                                        AgroTheme.radiusMd),
+                                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
                                   ),
                                   child: IconButton(
-                                    icon: const Icon(Icons.add_rounded,
-                                        color: Colors.white, size: 24),
-                                    tooltip:
-                                        "Dar de alta nuevo insumo en catálogo",
+                                    icon: const Icon(Icons.add_rounded, color: Colors.white, size: 24),
+                                    tooltip: "Dar de alta nuevo insumo en catálogo",
                                     onPressed: _mostrarModalNuevoInsumoCatalogo,
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 12),
+
+                            // SELECTOR MÉTODO DE DOSIS
+                            Row(
+                              children: [
+                                const Text("Método de Dosis:",
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: AgroTheme.colorTextSecondary)),
+                                const SizedBox(width: 10),
+                                ChoiceChip(
+                                  label: const Text("Dosis / 100 L"),
+                                  selected: _metodoDosis == "DOSIS_100",
+                                  selectedColor: const Color(0xFFE8F5E9),
+                                  labelStyle: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: _metodoDosis == "DOSIS_100"
+                                        ? const Color(0xFF2E7D32)
+                                        : AgroTheme.colorTextSecondary,
+                                  ),
+                                  backgroundColor: AgroTheme.colorBg,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    side: BorderSide(
+                                      color: _metodoDosis == "DOSIS_100"
+                                          ? const Color(0xFFA5D6A7)
+                                          : AgroTheme.colorBorder,
+                                    ),
+                                  ),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      setState(() => _metodoDosis = "DOSIS_100");
+                                      if (_dosisInputController.text.isNotEmpty) {
+                                        _calcularDosisMaquina(_dosisInputController.text);
+                                      }
+                                    }
+                                  },
+                                ),
+                                const SizedBox(width: 8),
+                                ChoiceChip(
+                                  label: const Text("Dosis / Ha"),
+                                  selected: _metodoDosis == "DOSIS_HA",
+                                  selectedColor: const Color(0xFFFFF8E1),
+                                  labelStyle: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: _metodoDosis == "DOSIS_HA"
+                                        ? const Color(0xFF8A6A1E)
+                                        : AgroTheme.colorTextSecondary,
+                                  ),
+                                  backgroundColor: AgroTheme.colorBg,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    side: BorderSide(
+                                      color: _metodoDosis == "DOSIS_HA"
+                                          ? const Color(0xFFFFE082)
+                                          : AgroTheme.colorBorder,
+                                    ),
+                                  ),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      setState(() => _metodoDosis = "DOSIS_HA");
+                                      if (_dosisInputController.text.isNotEmpty) {
+                                        _calcularDosisMaquina(_dosisInputController.text);
+                                      }
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
 
                             Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Expanded(
                                   flex: 5,
                                   child: TextFormField(
-                                    controller: _dosisEntradaController,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                            decimal: true),
+                                    controller: _dosisInputController,
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                     decoration: _inputDecoration(
-                                      _modalidadDosis == "DOSIS_100"
-                                          ? "Dosis / 100 L (cc o g)"
-                                          : "Dosis / Ha (Lts o Kg)",
+                                      _metodoDosis == "DOSIS_100"
+                                          ? "Dosis cada 100 L (cc / g)"
+                                          : "Dosis por Hectárea (L / Kg)",
                                     ),
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 13.5),
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
                                     onChanged: _calcularDosisMaquina,
                                   ),
                                 ),
@@ -1571,26 +1918,21 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   flex: 5,
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 14, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                     decoration: BoxDecoration(
                                       color: AgroTheme.colorBg,
-                                      borderRadius: BorderRadius.circular(
-                                          AgroTheme.radiusMd),
-                                      border: Border.all(
-                                          color: AgroTheme.colorBorder),
+                                      borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                                      border: Border.all(color: AgroTheme.colorBorder),
                                     ),
                                     child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         const Text(
                                           "Dosis x Máquina (2000L):",
                                           style: TextStyle(
                                             fontSize: 10.5,
                                             fontWeight: FontWeight.bold,
-                                            color:
-                                                AgroTheme.colorTextSecondary,
+                                            color: AgroTheme.colorTextSecondary,
                                           ),
                                         ),
                                         const SizedBox(height: 3),
@@ -1599,7 +1941,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                           style: const TextStyle(
                                             fontWeight: FontWeight.w800,
                                             fontSize: 14,
-                                            color: AgroTheme.colorAccentDark,
+                                            color: Color(0xFF1E6B4C),
                                           ),
                                         ),
                                       ],
@@ -1608,7 +1950,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 14),
                             SizedBox(
                               width: double.infinity,
                               height: 44,
@@ -1620,15 +1962,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: const [
                                     Icon(Icons.add_circle_outline_rounded,
-                                        size: 18,
-                                        color: AgroTheme.colorAccentDark),
+                                        size: 18, color: Color(0xFF1E6B4C)),
                                     SizedBox(width: 8),
                                     Text(
                                       "Agregar a la Receta",
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 13,
-                                        color: AgroTheme.colorAccentDark,
+                                        color: Color(0xFF1E6B4C),
                                       ),
                                     ),
                                   ],
@@ -1636,84 +1977,98 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               ),
                             ),
                             if (_itemsRecetaTemporal.isNotEmpty) ...[
-                              const SizedBox(height: 18),
-                              const Divider(color: AgroTheme.colorBorder),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: 14),
                               ListView.separated(
                                 shrinkWrap: true,
                                 physics: const NeverScrollableScrollPhysics(),
                                 itemCount: _itemsRecetaTemporal.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 6),
+                                separatorBuilder: (_, __) => const SizedBox(height: 6),
                                 itemBuilder: (context, idx) {
                                   final item = _itemsRecetaTemporal[idx];
-                                  final bool esHa =
-                                      item['modalidad_dosis'] == "DOSIS_HA";
+                                  final bool esDosisHa = item['metodo_dosis'] == "DOSIS_HA";
+                                  final double dosisValor =
+                                      double.tryParse(item['dosis_valor']?.toString() ?? '0') ?? 0.0;
+                                  final double consumoTotalLote = esDosisHa
+                                      ? (dosisValor * _superficieTotalSeleccionada)
+                                      : 0.0;
 
                                   return Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 10),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                                     decoration: BoxDecoration(
                                       color: AgroTheme.colorBg,
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                          color: AgroTheme.colorBorder),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: AgroTheme.colorBorder),
                                     ),
                                     child: Row(
                                       children: [
                                         Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 7, vertical: 3),
+                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                           decoration: BoxDecoration(
                                             color: AgroTheme.colorSurface,
-                                            borderRadius:
-                                                BorderRadius.circular(6),
-                                            border: Border.all(
-                                                color: AgroTheme.colorBorder),
+                                            borderRadius: BorderRadius.circular(5),
+                                            border: Border.all(color: AgroTheme.colorBorder),
                                           ),
                                           child: Text(
                                             "#${item['orden_aplic']}",
                                             style: const TextStyle(
-                                                fontWeight: FontWeight.w800,
-                                                fontSize: 11),
+                                                fontWeight: FontWeight.w800, fontSize: 11),
                                           ),
                                         ),
                                         const SizedBox(width: 10),
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Text(
-                                                item['producto'],
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 13,
-                                                  color: AgroTheme.colorText,
-                                                ),
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    item['producto'],
+                                                    style: const TextStyle(
+                                                      fontWeight: FontWeight.w700,
+                                                      fontSize: 13,
+                                                      color: AgroTheme.colorText,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                        horizontal: 5, vertical: 1),
+                                                    decoration: BoxDecoration(
+                                                      color: esDosisHa
+                                                          ? const Color(0xFFFFF8E1)
+                                                          : const Color(0xFFE8F5E9),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                    ),
+                                                    child: Text(
+                                                      esDosisHa ? "Por Ha" : "Por 100L",
+                                                      style: TextStyle(
+                                                        fontSize: 9.5,
+                                                        fontWeight: FontWeight.w800,
+                                                        color: esDosisHa
+                                                            ? const Color(0xFF8A6A1E)
+                                                            : const Color(0xFF2E7D32),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
                                               ),
                                               const SizedBox(height: 2),
                                               Text(
-                                                esHa
-                                                    ? "Dosis Ha: ${item['dosis_entrada']} L/Kg  ·  Máq (2000L): ${item['dosis_maq']} L/Kg"
-                                                    : "Dosis 100L: ${item['dosis_100']}  ·  Máq (2000L): ${item['dosis_maq']} L/Kg",
+                                                esDosisHa
+                                                    ? "Dosis: ${item['dosis_valor']} /Ha  ·  Máq: ${item['dosis_maq']} L/Kg  ·  Total: ${consumoTotalLote.toStringAsFixed(2)} L/Kg"
+                                                    : "Dosis 100L: ${item['dosis_100']}  ·  Máq: ${item['dosis_maq']} L/Kg",
                                                 style: const TextStyle(
-                                                  fontSize: 11.5,
-                                                  color: AgroTheme
-                                                      .colorTextSecondary,
-                                                  fontWeight: FontWeight.w500,
+                                                  fontSize: 11,
+                                                  color: AgroTheme.colorTextSecondary,
                                                 ),
                                               ),
                                             ],
                                           ),
                                         ),
                                         IconButton(
-                                          icon: const Icon(
-                                              Icons.delete_outline_rounded,
-                                              size: 20,
-                                              color: AgroTheme.colorDanger),
-                                          onPressed: () =>
-                                              _eliminarProductoDeReceta(idx),
+                                          icon: const Icon(Icons.delete_outline_rounded,
+                                              size: 18, color: AgroTheme.colorDanger),
+                                          onPressed: () => _eliminarProductoDeReceta(idx),
                                         ),
                                       ],
                                     ),
@@ -1726,10 +2081,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                       ),
                       const SizedBox(height: 24),
 
-                      // SECCIÓN 4: PARÁMETROS TÉCNICOS DE PULVERIZACIÓN (parametros_aplic)
+                      // SECCIÓN 4: PARÁMETROS TÉCNICOS (parametros_aplic)
                       _buildSeccionHeader(
-                          "4. Parámetros Técnicos de Pulverización",
-                          Icons.speed_rounded),
+                          "4. Parámetros Técnicos de Pulverización", Icons.speed_rounded),
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(18),
@@ -1741,16 +2095,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramVientoCtrl,
-                                    decoration: _inputDecoration(
-                                        "Vel. Viento (ej: 5-8 km/h)"),
+                                    decoration: _inputDecoration("Vel. Viento (ej: 5-8 km/h)"),
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramTempCtrl,
-                                    decoration: _inputDecoration(
-                                        "Temperatura (ej: 19 °C)"),
+                                    decoration: _inputDecoration("Temperatura (ej: 19 °C)"),
                                   ),
                                 ),
                               ],
@@ -1761,16 +2113,14 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramGotaCtrl,
-                                    decoration: _inputDecoration(
-                                        "Tamaño Gota (ej: 250 µm)"),
+                                    decoration: _inputDecoration("Tamaño Gota (ej: 250 µm)"),
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextFormField(
                                     controller: _paramVelocidadCtrl,
-                                    decoration: _inputDecoration(
-                                        "Vel. Avance (ej: 5.5 km/h)"),
+                                    decoration: _inputDecoration("Vel. Avance (ej: 5.5 km/h)"),
                                   ),
                                 ),
                               ],
@@ -1778,39 +2128,37 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                             const SizedBox(height: 12),
                             TextFormField(
                               controller: _paramCaudalCtrl,
-                              decoration: _inputDecoration(
-                                  "Caudal por Hectárea (ej: 1000 L/Ha)"),
+                              decoration: _inputDecoration("Caudal por Hectárea (ej: 1000 L/Ha)"),
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 28),
 
-                      // BOTÓN FINAL GUARDAR
                       SizedBox(
                         width: double.infinity,
-                        height: 54,
+                        height: 52,
                         child: SoftButton(
                           onTap: _guardando ? null : _guardarOrdenCompleta,
                           child: Center(
                             child: _guardando
                                 ? const SizedBox(
-                                    width: 22,
-                                    height: 22,
+                                    width: 20,
+                                    height: 20,
                                     child: CircularProgressIndicator(
-                                        color: Colors.white, strokeWidth: 2.2))
+                                        color: Colors.white, strokeWidth: 2))
                                 : Text(
                                     _esEdicion
                                         ? "Actualizar Orden Técnica"
                                         : "Generar y Guardar Orden Técnica",
                                     style: const TextStyle(
                                         color: Colors.white,
-                                        fontSize: 15,
+                                        fontSize: 14.5,
                                         fontWeight: FontWeight.w800)),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 36),
                     ],
                   ),
                 ),
@@ -1822,7 +2170,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   Widget _buildSeccionHeader(String titulo, IconData icono) {
     return Row(
       children: [
-        Icon(icono, size: 18, color: AgroTheme.colorAccentDark),
+        Icon(icono, size: 18, color: const Color(0xFF1E6B4C)),
         const SizedBox(width: 8),
         Text(titulo,
             style: const TextStyle(
@@ -1837,8 +2185,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
       border: Border.all(color: AgroTheme.colorBorder),
       boxShadow: const [
-        BoxShadow(
-            color: Color(0x04141E18), blurRadius: 10, offset: Offset(0, 3)),
+        BoxShadow(color: Color(0x04141E18), blurRadius: 10, offset: Offset(0, 3)),
       ],
     );
   }
@@ -1846,8 +2193,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      labelStyle:
-          const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+      labelStyle: const TextStyle(fontSize: 12.5, color: AgroTheme.colorTextSecondary),
       filled: true,
       fillColor: AgroTheme.colorBg,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

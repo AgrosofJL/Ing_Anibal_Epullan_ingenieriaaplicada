@@ -1,12 +1,16 @@
 import 'dart:io';
-import 'dart:math' as math;
+import 'dart:typed_data';
+import 'package:excel/excel.dart' as xl hide Border;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -175,9 +179,132 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
     }).toList();
   }
 
-  // ==========================================================================
-  // 💡 MODAL COMPACTO: CURVA Y EVOLUCIÓN VISUAL (PDF ARRIBA A LA DERECHA)
-  // ==========================================================================
+  Future<void> _exportarExcelMatrizTrampas() async {
+    if (_trampasFiltradas.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay datos para exportar en el filtro activo.')),
+      );
+      return;
+    }
+
+    try {
+      final excel = xl.Excel.createExcel();
+      final sheet = excel['Matriz_Trampeo'];
+      excel.delete('Sheet1');
+
+      final headerStyle = xl.CellStyle(
+        bold: true,
+        fontColorHex: xl.ExcelColor.white,
+        backgroundColorHex: xl.ExcelColor.fromHexString('#1E6B4C'),
+        horizontalAlign: xl.HorizontalAlign.Center,
+      );
+
+      final List<String> semanas = List<String>.from(_semanasDetectadas);
+      if (semanas.isEmpty) semanas.add("Semana ${DateFormat('w').format(DateTime.now())}");
+
+      final headers = [
+        'Trampa N°',
+        'Chacra',
+        'Cuadro',
+        'Fila',
+        'Plaga',
+        'Cultivo',
+        'Variedad',
+        ...semanas.map((s) => s.replaceAll('Semana ', 'SEM ')),
+      ];
+
+      for (int i = 0; i < headers.length; i++) {
+        final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = xl.TextCellValue(headers[i]);
+        cell.cellStyle = headerStyle;
+      }
+
+      int rowIdx = 1;
+      for (var t in _trampasFiltradas) {
+        final String codTr = t['cod_trampa'] ?? '';
+
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['trampa_numero']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['chacra']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['cuadro']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['fila']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['tipo_trampa']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['cultivo']?.toString() ?? '');
+        sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value =
+            xl.TextCellValue(t['variedad']?.toString() ?? '');
+
+        int colOffset = 7;
+        for (var sem in semanas) {
+          final lecturasSem = _lecturasTemporada.where(
+            (l) => l['cod_trampa'] == codTr && l['semana'] == sem,
+          );
+
+          if (lecturasSem.isEmpty) {
+            sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: colOffset, rowIndex: rowIdx)).value =
+                xl.TextCellValue('-');
+          } else {
+            final l = lecturasSem.first;
+            final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
+            final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
+            final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
+            final int total = m + hv + hg;
+
+            final cell = sheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: colOffset, rowIndex: rowIdx));
+            cell.value = xl.IntCellValue(total);
+
+            if (total >= 5) {
+              cell.cellStyle = xl.CellStyle(
+                bold: true,
+                fontColorHex: xl.ExcelColor.fromHexString('#C62828'),
+                backgroundColorHex: xl.ExcelColor.fromHexString('#FFEBEE'),
+              );
+            }
+          }
+          colOffset++;
+        }
+        rowIdx++;
+      }
+
+      final fileBytes = excel.save();
+      if (fileBytes == null) return;
+
+      final Uint8List bytes = Uint8List.fromList(fileBytes);
+      final String nombreArchivo =
+          'Monitoreo_Trampas_${widget.nombreProductor.replaceAll(' ', '_')}.xlsx';
+
+      if (kIsWeb) {
+        await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+      } else if (Platform.isWindows) {
+        final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        final filePath = "${dir.path}/$nombreArchivo";
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+        await OpenFilex.open(filePath);
+      } else {
+        await Share.shareXFiles(
+          [
+            XFile.fromData(
+              bytes,
+              name: nombreArchivo,
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ),
+          ],
+          text: 'Matriz de Trampas - ${widget.nombreProductor}',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: const Color(0xFFC62828), content: Text("Error al exportar: $e")),
+      );
+    }
+  }
+
   void _mostrarReporteSemanas(Map<String, dynamic> trampa) async {
     final db = await DatabaseHelper.instance.database;
     final List<Map<String, dynamic>> lecturas = await db.query(
@@ -189,7 +316,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
 
     if (!mounted) return;
 
-    // Calcular máximo para escalar las barras de la curva
     int maxCaptura = 1;
     for (var l in lecturas) {
       final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
@@ -205,7 +331,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) {
         return Container(
-          // Altura compacta y no excesiva
           height: MediaQuery.of(context).size.height * 0.65,
           decoration: const BoxDecoration(
             color: AgroTheme.colorSurface,
@@ -226,8 +351,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ),
               ),
               const SizedBox(height: 10),
-
-              // Barra superior: Título, Botón Exportar PDF y Cruz de Cierre
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -254,10 +377,9 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                   ),
                   Row(
                     children: [
-                      // 💡 Botón PDF oficial colocado arriba junto a la cruz
                       IconButton(
                         icon: const Icon(Icons.picture_as_pdf_outlined,
-                            color: AgroTheme.colorAccentDark, size: 22),
+                            color: Color(0xFF1E6B4C), size: 22),
                         tooltip: "Exportar Reporte PDF",
                         onPressed: () => _generarPdfTrampa(trampa, lecturas),
                       ),
@@ -270,8 +392,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ],
               ),
               const Divider(color: AgroTheme.colorBorder, height: 16),
-
-              // Chips de contexto rápido
               Wrap(
                 spacing: 6,
                 runSpacing: 4,
@@ -279,14 +399,10 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                   _buildTagBadge("Fila: ${trampa['fila']}"),
                   _buildTagBadge("Cultivo: ${trampa['cultivo']}"),
                   _buildTagBadge("Variedad: ${trampa['variedad']}"),
-                  _buildTagBadge("${lecturas.length} semanas monitoreadas"),
+                  _buildTagBadge("${lecturas.length} semanas"),
                 ],
               ),
               const SizedBox(height: 14),
-
-              // =========================================================
-              // 💡 VISUALIZACIÓN GRÁFICA / CURVA SEMANAL COMPACTA
-              // =========================================================
               Expanded(
                 child: lecturas.isEmpty
                     ? const Center(
@@ -322,8 +438,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                 final bool alertaUmbral = total >= 5;
                                 final String semNom = (l['semana'] ?? 'S/D').toString().replaceAll('Semana ', 'Sem ');
                                 final String? foto = l['url_evidencia']?.toString();
-
-                                // Altura de barra gráfica proporcional
                                 final double ratio = (total / maxCaptura).clamp(0.08, 1.0);
 
                                 return Container(
@@ -336,7 +450,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: alertaUmbral
-                                          ? AgroTheme.colorDanger.withOpacity(0.4)
+                                          ? const Color(0xFFC62828).withOpacity(0.4)
                                           : AgroTheme.colorBorder,
                                       width: alertaUmbral ? 1.2 : 1.0,
                                     ),
@@ -349,13 +463,11 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                           fontWeight: FontWeight.w800,
                                           fontSize: 11,
                                           color: alertaUmbral
-                                              ? AgroTheme.colorDanger
+                                              ? const Color(0xFFC62828)
                                               : AgroTheme.colorText,
                                         ),
                                       ),
                                       const SizedBox(height: 6),
-
-                                      // Gráfico de barra vertical con microanimación
                                       Expanded(
                                         child: Align(
                                           alignment: Alignment.bottomCenter,
@@ -364,13 +476,9 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                             child: Container(
                                               width: 22,
                                               decoration: BoxDecoration(
-                                                gradient: LinearGradient(
-                                                  begin: Alignment.bottomCenter,
-                                                  end: Alignment.topCenter,
-                                                  colors: alertaUmbral
-                                                      ? [AgroTheme.colorDanger, const Color(0xFFF87171)]
-                                                      : [AgroTheme.colorAccentDark, AgroTheme.colorAccent],
-                                                ),
+                                                color: alertaUmbral
+                                                    ? const Color(0xFFC62828)
+                                                    : const Color(0xFF1E6B4C),
                                                 borderRadius: BorderRadius.circular(6),
                                               ),
                                               child: Center(
@@ -388,20 +496,17 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                         ),
                                       ),
                                       const SizedBox(height: 8),
-
-                                      // Datos desglosados (Macho / Hembras)
                                       Text("M: $m · H: ${hv + hg}",
                                           style: const TextStyle(
                                               fontSize: 9.5,
                                               fontWeight: FontWeight.w600,
                                               color: AgroTheme.colorTextSecondary)),
                                       const SizedBox(height: 4),
-
                                       if (foto != null && foto.isNotEmpty)
                                         InkWell(
                                           onTap: () => _verFoto(foto),
                                           child: const Icon(Icons.camera_alt_rounded,
-                                              size: 14, color: AgroTheme.colorAccentDark),
+                                              size: 14, color: Color(0xFF1E6B4C)),
                                         )
                                       else
                                         const SizedBox(height: 14),
@@ -421,9 +526,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
     );
   }
 
-  // ==========================================================================
-  // 💡 MODAL DIRECTO PARA REGISTRAR CAPTURA (SIN CARTELES AMARILLOS)
-  // ==========================================================================
   void _abrirModalLecturaDirecta(Map<String, dynamic> trampa) {
     DateTime fechaSeleccionada = DateTime.now();
     final fechaCtrl = TextEditingController(
@@ -544,7 +646,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                               suffixIcon: const Icon(
                                 Icons.calendar_today_rounded,
                                 size: 18,
-                                color: AgroTheme.colorAccentDark,
+                                color: Color(0xFF1E6B4C),
                               ),
                             ),
                           ),
@@ -565,7 +667,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                 child: _buildContador(
                                   "Machos",
                                   machosCtrl,
-                                  AgroTheme.colorDanger,
+                                  const Color(0xFFC62828),
                                   () => setModalState(() {}),
                                 ),
                               ),
@@ -591,7 +693,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                           ),
                           const SizedBox(height: 14),
 
-                          // Foto Evidencia
                           InkWell(
                             onTap: () async {
                               try {
@@ -612,12 +713,12 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: fotoEvidencia != null
-                                    ? AgroTheme.colorAccentSoft
+                                    ? const Color(0xFFE8F5E9)
                                     : AgroTheme.colorBg,
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: fotoEvidencia != null
-                                      ? AgroTheme.colorAccent
+                                      ? const Color(0xFFA5D6A7)
                                       : AgroTheme.colorBorder,
                                 ),
                               ),
@@ -628,7 +729,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                     Icons.camera_alt_outlined,
                                     size: 18,
                                     color: fotoEvidencia != null
-                                        ? AgroTheme.colorAccentDark
+                                        ? const Color(0xFF1E6B4C)
                                         : Colors.grey,
                                   ),
                                   const SizedBox(width: 8),
@@ -640,7 +741,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                       fontWeight: FontWeight.w700,
                                       fontSize: 12,
                                       color: fotoEvidencia != null
-                                          ? AgroTheme.colorAccentDark
+                                          ? const Color(0xFF1E6B4C)
                                           : AgroTheme.colorText,
                                     ),
                                   ),
@@ -650,18 +751,17 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                           ),
                           const SizedBox(height: 14),
 
-                          // 💡 Estado sobrio sin carteles amarillos estridentes
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
                               color: alertaUmbral
                                   ? const Color(0xFFFEF2F2)
-                                  : AgroTheme.colorAccentSoft,
+                                  : const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(
                                   color: alertaUmbral
-                                      ? AgroTheme.colorDanger.withOpacity(0.5)
-                                      : AgroTheme.colorAccent),
+                                      ? const Color(0xFFEF9A9A)
+                                      : const Color(0xFFA5D6A7)),
                             ),
                             child: Row(
                               children: [
@@ -670,21 +770,21 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                       ? Icons.warning_amber_rounded
                                       : Icons.check_circle_outline_rounded,
                                   color: alertaUmbral
-                                      ? AgroTheme.colorDanger
-                                      : AgroTheme.colorAccentDark,
+                                      ? const Color(0xFFC62828)
+                                      : const Color(0xFF1E6B4C),
                                   size: 20,
                                 ),
                                 const SizedBox(width: 8),
                                 Text(
                                   alertaUmbral
-                                      ? "Total: $total individuos (Supera Umbral Económico)"
-                                      : "Total: $total individuos (Nivel Tolerable)",
+                                      ? "Total: $total ind. (Supera Umbral Económico)"
+                                      : "Total: $total ind. (Nivel Tolerable)",
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 12,
                                     color: alertaUmbral
-                                        ? AgroTheme.colorDanger
-                                        : AgroTheme.colorAccentDark,
+                                        ? const Color(0xFFC62828)
+                                        : const Color(0xFF1E6B4C),
                                   ),
                                 ),
                               ],
@@ -695,7 +795,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                     ),
                   ),
 
-                  // Botón Guardar
                   SizedBox(
                     width: double.infinity,
                     height: 48,
@@ -737,9 +836,8 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                           _cargarDatosCompletos();
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              backgroundColor: AgroTheme.colorAccent,
-                              content: Text(
-                                  '¡Lectura registrada para $semanaCalculada!'),
+                              backgroundColor: const Color(0xFF1E6B4C),
+                              content: Text('¡Lectura registrada para $semanaCalculada!'),
                             ),
                           );
                         }
@@ -825,20 +923,21 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
     );
   }
 
-  // ==========================================================================
-  // 📄 PDF ULTRA PROFESIONAL: LOGO A LA IZQUIERDA + GRÁFICO HISTOGRAMA DE CURVA
-  // ==========================================================================
   Future<void> _generarPdfTrampa(
       Map<String, dynamic> trampa, List<Map<String, dynamic>> lecturas) async {
     final pdf = pw.Document();
 
     pw.MemoryImage? logoImage;
     try {
-      final logoBytes = await rootBundle.load('logo/logo.png');
+      final logoBytes = await rootBundle.load('logo/logo_anibal.png');
       logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
-    } catch (_) {}
+    } catch (_) {
+      try {
+        final logoBytesFallback = await rootBundle.load('logo/logo.png');
+        logoImage = pw.MemoryImage(logoBytesFallback.buffer.asUint8List());
+      } catch (_) {}
+    }
 
-    // Preparar datos para el gráfico de barras nativo
     final List<Map<String, dynamic>> datosGrafico = [];
     int maxValor = 5;
 
@@ -882,14 +981,13 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
           );
         },
         build: (pw.Context context) => [
-          // 💡 Cabecera con Logo 3x3 cm a la izquierda
           pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
               if (logoImage != null) ...[
                 pw.Container(
-                  width: 85,
-                  height: 85,
+                  width: 56.7,
+                  height: 56.7,
                   child: pw.Image(logoImage, fit: pw.BoxFit.contain),
                 ),
                 pw.SizedBox(width: 14),
@@ -917,21 +1015,10 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
               pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.end,
                 children: [
-                  pw.Text("EMISIÓN OFICIAL",
-                      style: pw.TextStyle(
-                          fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
+                  pw.Text("EMISIÓN",
+                      style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
                   pw.Text(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now()),
                       style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold)),
-                  pw.SizedBox(height: 4),
-                  pw.Container(
-                    padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: pw.BoxDecoration(
-                      color: const PdfColor.fromInt(0xFFE8F5E9),
-                      borderRadius: pw.BorderRadius.circular(4),
-                    ),
-                    child: pw.Text("MONITOREO DE PLAGAS",
-                        style: const pw.TextStyle(fontSize: 7, color: PdfColor.fromInt(0xFF1B5E20))),
-                  ),
                 ],
               ),
             ],
@@ -940,7 +1027,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
           pw.Divider(thickness: 1, color: const PdfColor.fromInt(0xFF1E6B4C)),
           pw.SizedBox(height: 8),
 
-          // Ficha de Parámetros de la Trampa
           pw.Container(
             padding: const pw.EdgeInsets.all(8),
             decoration: pw.BoxDecoration(
@@ -955,7 +1041,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9.5)),
                 pw.Text("PLAGA: ${trampa['tipo_trampa']}",
                     style: const pw.TextStyle(fontSize: 9)),
-                pw.Text("CHACRA: ${trampa['chacra']} · CD: ${trampa['cuadro']} · FILA: ${trampa['fila']}",
+                pw.Text("CHACRA: ${trampa['chacra']} · CD: ${trampa['cuadro']}",
                     style: const pw.TextStyle(fontSize: 9)),
                 pw.Text("VARIEDAD: ${trampa['variedad']}",
                     style: const pw.TextStyle(fontSize: 9)),
@@ -964,9 +1050,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
           ),
           pw.SizedBox(height: 14),
 
-          // =========================================================
-          // 💡 GRÁFICO HISTOGRAMA DE BARRAS DE LA CURVA EN EL PDF
-          // =========================================================
           pw.Text("CURVA DE FLUCTUACIÓN POBLACIONAL (CAPTURAS / SEMANA)",
               style: pw.TextStyle(
                   fontSize: 10,
@@ -1021,7 +1104,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
           ),
           pw.SizedBox(height: 14),
 
-          // Tabla detallada
           pw.Text("RECUENTO SEMANAL DETALLADO",
               style: pw.TextStyle(
                   fontSize: 10,
@@ -1069,20 +1151,25 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
       ),
     );
 
-    final bytes = await pdf.save();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/Reporte_Trampa_${trampa['trampa_numero']}.pdf');
-    await file.writeAsBytes(bytes, flush: true);
+    final Uint8List bytes = await pdf.save();
+    final String nombreArchivo = 'Reporte_Trampa_${trampa['trampa_numero']}.pdf';
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/pdf')],
-      text: 'Curva Semanal Trampa #${trampa['trampa_numero']} - ${widget.nombreProductor}',
-    );
+    if (kIsWeb) {
+      await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+    } else if (Platform.isWindows) {
+      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final filePath = "${dir.path}/$nombreArchivo";
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+      await OpenFilex.open(filePath);
+    } else {
+      await Share.shareXFiles(
+        [XFile.fromData(bytes, name: nombreArchivo, mimeType: 'application/pdf')],
+        text: 'Curva Semanal Trampa #${trampa['trampa_numero']} - ${widget.nombreProductor}',
+      );
+    }
   }
 
-  // ==========================================================================
-  // 📄 EXPORTACIÓN PDF GLOBAL DE MATRIZ
-  // ==========================================================================
   Future<void> _exportarPdfMatrizOficial() async {
     if (_trampasFiltradas.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1096,9 +1183,14 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
 
     pw.MemoryImage? logoImage;
     try {
-      final logoBytes = await rootBundle.load('logo/logo.png');
+      final logoBytes = await rootBundle.load('logo/logo_anibal.png');
       logoImage = pw.MemoryImage(logoBytes.buffer.asUint8List());
-    } catch (_) {}
+    } catch (_) {
+      try {
+        final logoBytesFallback = await rootBundle.load('logo/logo.png');
+        logoImage = pw.MemoryImage(logoBytesFallback.buffer.asUint8List());
+      } catch (_) {}
+    }
 
     final List<String> semanas = List<String>.from(_semanasDetectadas);
     if (semanas.isEmpty) semanas.add("Semana ${DateFormat('w').format(DateTime.now())}");
@@ -1134,15 +1226,14 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
             children: [
               if (logoImage != null) ...[
                 pw.Container(
-                  width: 80,
-                  height: 80,
+                  width: 56.7,
+                  height: 56.7,
                   child: pw.Image(logoImage, fit: pw.BoxFit.contain),
                 ),
                 pw.SizedBox(width: 14),
               ],
               pw.Expanded(
                 child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Text(
                       "AGROSOFT J&L",
@@ -1231,29 +1322,27 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
               ];
             }).toList(),
           ),
-          pw.SizedBox(height: 10),
-          pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Text("(!) Supera el umbral de daño económico (>= 5 individuos).",
-                  style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.red900)),
-              pw.Text("Firma Responsable Fitosanitario: ___________________________",
-                  style: const pw.TextStyle(fontSize: 8)),
-            ],
-          ),
         ],
       ),
     );
 
-    final bytes = await pdf.save();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/Reporte_Matriz_Trampas_$anio.pdf');
-    await file.writeAsBytes(bytes, flush: true);
+    final Uint8List bytes = await pdf.save();
+    final String nombreArchivo = 'Matriz_Trampas_$anio.pdf';
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/pdf')],
-      text: 'Matriz Semanal de Trampeo - ${widget.nombreProductor}',
-    );
+    if (kIsWeb) {
+      await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+    } else if (Platform.isWindows) {
+      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final filePath = "${dir.path}/$nombreArchivo";
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+      await OpenFilex.open(filePath);
+    } else {
+      await Share.shareXFiles(
+        [XFile.fromData(bytes, name: nombreArchivo, mimeType: 'application/pdf')],
+        text: 'Matriz Semanal de Trampeo - ${widget.nombreProductor}',
+      );
+    }
   }
 
   @override
@@ -1264,8 +1353,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
         backgroundColor: AgroTheme.colorSurface.withOpacity(0.92),
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              size: 20, color: AgroTheme.colorText),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AgroTheme.colorText),
           onPressed: () => Navigator.pop(context),
         ),
         title: Column(
@@ -1274,33 +1362,32 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
             const Text(
               "Monitoreo de Trampas",
               style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16.5,
-                  color: AgroTheme.colorText),
+                  fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
             ),
             Text(
               widget.nombreProductor,
               style: const TextStyle(
-                  fontSize: 11.5,
-                  color: AgroTheme.colorTextSecondary,
-                  fontWeight: FontWeight.w500),
+                  fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
             ),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.picture_as_pdf_outlined,
-                color: AgroTheme.colorAccentDark),
-            tooltip: "Exportar Planilla Matriz Completa",
+            icon: const Icon(Icons.table_view_rounded, color: Color(0xFF2E7D32)),
+            tooltip: "Exportar a Excel",
+            onPressed: _trampasFiltradas.isEmpty ? null : _exportarExcelMatrizTrampas,
+          ),
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined, color: Color(0xFF1E6B4C)),
+            tooltip: "Exportar PDF Matriz",
             onPressed: _exportarPdfMatrizOficial,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ],
       ),
       body: SafeArea(
         child: Column(
           children: [
-            // Filtros de Chacra y Cuadro
             Container(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
               color: AgroTheme.colorSurface,
@@ -1319,7 +1406,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                         return ChoiceChip(
                           label: Text(ch == "TODAS" ? "Todas" : "Ch. $ch"),
                           selected: isSel,
-                          selectedColor: AgroTheme.colorAccentDark,
+                          selectedColor: const Color(0xFF1E6B4C),
                           labelStyle: TextStyle(
                             fontSize: 11.5,
                             fontWeight: isSel ? FontWeight.w800 : FontWeight.w600,
@@ -1352,7 +1439,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                           return ChoiceChip(
                             label: Text(cu == "TODOS" ? "Todos los Cuadros" : "Cuadro $cu"),
                             selected: isSel,
-                            selectedColor: const Color(0xFFB8862A),
+                            selectedColor: const Color(0xFF8A6A1E),
                             labelStyle: TextStyle(
                               fontSize: 11,
                               fontWeight: isSel ? FontWeight.w800 : FontWeight.w500,
@@ -1370,8 +1457,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ],
               ),
             ),
-
-            // Buscador Rápido
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 4),
               child: Container(
@@ -1394,16 +1479,11 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ),
               ),
             ),
-
-            // Listado de Trampas
             Expanded(
               child: _cargando
-                  ? const Center(child: CircularProgressIndicator(color: AgroTheme.colorAccent))
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
                   : _trampasFiltradas.isEmpty
-                      ? const Center(
-                          child: Text("No se encontraron trampas en este sector.",
-                              style: TextStyle(color: AgroTheme.colorTextSecondary)),
-                        )
+                      ? const Center(child: Text("No se encontraron trampas en este sector."))
                       : ListView.separated(
                           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                           itemCount: _trampasFiltradas.length,
@@ -1438,12 +1518,14 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                               decoration: BoxDecoration(
-                                                color: const Color(0xFFB8862A),
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
+                                                  color: const Color(0xFFE8F5E9),
+                                                  borderRadius: BorderRadius.circular(6)),
                                               child: Text(
                                                 "TR #${t['trampa_numero']}",
-                                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11),
+                                                style: const TextStyle(
+                                                    color: Color(0xFF2E7D32),
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 11),
                                               ),
                                             ),
                                             const SizedBox(width: 8),
@@ -1455,9 +1537,8 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                           children: [
                                             if (fotoUrl != null && fotoUrl.isNotEmpty)
                                               IconButton(
-                                                icon: const Icon(Icons.image_outlined, size: 20, color: AgroTheme.colorAccentDark),
+                                                icon: const Icon(Icons.image_outlined, size: 20, color: Color(0xFF1E6B4C)),
                                                 onPressed: () => _verFoto(fotoUrl),
-                                                tooltip: "Ver Foto",
                                               ),
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
@@ -1468,7 +1549,8 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                               ),
                                               child: Text(
                                                 "$ultimaSemana ($ultimoTot)",
-                                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AgroTheme.colorTextSecondary),
+                                                style: const TextStyle(
+                                                    fontSize: 11, fontWeight: FontWeight.w700, color: AgroTheme.colorTextSecondary),
                                               ),
                                             ),
                                           ],
@@ -1486,7 +1568,6 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                       style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
                                     ),
                                     const SizedBox(height: 10),
-
                                     Row(
                                       children: [
                                         Expanded(
@@ -1520,10 +1601,10 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                               child: Row(
                                                 mainAxisAlignment: MainAxisAlignment.center,
                                                 children: const [
-                                                  Icon(Icons.show_chart_rounded, color: AgroTheme.colorAccentDark, size: 16),
+                                                  Icon(Icons.show_chart_rounded, color: Color(0xFF1E6B4C), size: 16),
                                                   SizedBox(width: 4),
                                                   Text("Curva",
-                                                      style: TextStyle(color: AgroTheme.colorAccentDark, fontWeight: FontWeight.w800, fontSize: 12)),
+                                                      style: TextStyle(color: Color(0xFF1E6B4C), fontWeight: FontWeight.w800, fontSize: 12)),
                                                 ],
                                               ),
                                             ),

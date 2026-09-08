@@ -19,7 +19,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 6,
+      version: 7,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -30,16 +30,6 @@ class DatabaseHelper {
       CREATE TABLE IF NOT EXISTS _control_sync (
         tabla TEXT PRIMARY KEY,
         ultima_fecha TEXT
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS config_app_enlaces (
-        id INTEGER PRIMARY KEY,
-        plataforma TEXT,
-        url_instalacion TEXT,
-        version TEXT,
-        instrucciones TEXT
       )
     ''');
 
@@ -64,6 +54,19 @@ class DatabaseHelper {
         macro_rubro TEXT
       )
     ''');
+
+    await db.execute('''
+  CREATE TABLE IF NOT EXISTS parametros_aplic (
+    id INTEGER PRIMARY KEY,
+    vel_viento TEXT,
+    Temperatura TEXT,
+    Tamano_gota TEXT,
+    Vel_Aplicacion TEXT,
+    Caudal_Ha TEXT,
+    cod_receta INTEGER,
+    cod_orden INTEGER
+  )
+''');
 
     await db.execute('''
       CREATE TABLE recetas_aplicaciones (
@@ -197,6 +200,7 @@ class DatabaseHelper {
       )
     ''');
 
+    // 💡 ACA ES LO NUEVO: Tablas de Monitoreo de Campo (Fenología y Trampas)
     await _crearTablasCampo(db);
   }
 
@@ -269,66 +273,17 @@ class DatabaseHelper {
         PRIMARY KEY (id, id_reg)
       )
     ''');
-
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS parametros_aplic (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cod_orden INTEGER,
-        cod_receta INTEGER,
-        vel_viento TEXT,
-        Temperatura TEXT,
-        Tamano_gota TEXT,
-        Vel_Aplicacion TEXT,
-        Caudal_Ha TEXT
-      )
-    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldV, int newV) async {
     if (oldV < 4) {
       await _crearTablasCampo(db);
     }
-
-    // 💡 Migración segura a Versión 6 para bases ya instaladas
-    if (oldV < 6) {
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS parametros_aplic (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          cod_orden INTEGER,
-          cod_receta INTEGER,
-          vel_viento TEXT,
-          Temperatura TEXT,
-          Tamano_gota TEXT,
-          Vel_Aplicacion TEXT,
-          Caudal_Ha TEXT
-        )
-      ''');
-
-      await db.execute(''' CREATE TABLE IF NOT EXISTS _eliminaciones_pendientes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  tabla TEXT,
-  campo_pk TEXT,
-  valor_pk TEXT,
-  fecha TEXT
-        )
-      ''');
-
-      await db.execute('''
-        CREATE TABLE IF NOT EXISTS config_app_enlaces (
-          id INTEGER PRIMARY KEY,
-          plataforma TEXT,
-          url_instalacion TEXT,
-          version TEXT,
-          instrucciones TEXT
-        )
-      ''');
-    }
   }
 
   Future<int> obtenerSiguienteId(String tabla, String campoId) async {
     final db = await instance.database;
-    final res = await db.rawQuery(
-        'SELECT MAX(CAST($campoId AS INTEGER)) as max_id FROM $tabla');
+    final res = await db.rawQuery('SELECT MAX(CAST($campoId AS INTEGER)) as max_id FROM $tabla');
     int maxId = (res.first['max_id'] as int?) ?? 0;
     return maxId + 1;
   }

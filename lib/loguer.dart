@@ -28,6 +28,12 @@ class _LoguerScreenState extends State<LoguerScreen> {
   bool _isLoading = false;
   String _deviceIdentifier = "Obteniendo...";
 
+  // 💡 Verificación centralizada de entorno
+  bool get _esWebOEscritorio {
+    if (kIsWeb) return true;
+    return Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -43,12 +49,16 @@ class _LoguerScreenState extends State<LoguerScreen> {
   }
 
   Future<void> _getDeviceIdentifier() async {
-    // 💡 Si corre en Safari / Web, se omite la consulta de hardware nativo
+    // 💡 Si corre en la Web o en la PC (Windows/Mac/Linux), omitimos el hardware ID
     if (kIsWeb) {
       if (!mounted) return;
-      setState(() {
-        _deviceIdentifier = "Safari PWA / Web Client";
-      });
+      setState(() => _deviceIdentifier = "Navegador Web / PWA");
+      return;
+    }
+
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (!mounted) return;
+      setState(() => _deviceIdentifier = "Estación de Trabajo / PC");
       return;
     }
 
@@ -68,9 +78,7 @@ class _LoguerScreenState extends State<LoguerScreen> {
     }
 
     if (!mounted) return;
-    setState(() {
-      _deviceIdentifier = deviceId;
-    });
+    setState(() => _deviceIdentifier = deviceId);
   }
 
   Future<void> _checkExistingSession() async {
@@ -124,9 +132,9 @@ class _LoguerScreenState extends State<LoguerScreen> {
           return;
         }
 
-        // 💡 OMITIR DEVICE SI ESTAMOS EN SAFARI / WEB
-        // Solo valida Device ID si NO es Web y el usuario tiene un device fijado en la BD
-        if (!kIsWeb && dbDevice.isNotEmpty && dbDevice != _deviceIdentifier) {
+        // 💡 CONTROL DE DISPOSITIVO: SOLO SE EXIGE EN APLICACIÓN MÓVIL (ANDROID / IOS)
+        // En la computadora o en el navegador web queda libre de bloqueo por ID de hardware
+        if (!_esWebOEscritorio && dbDevice.isNotEmpty && dbDevice != _deviceIdentifier) {
           if (mounted) setState(() => _isLoading = false);
           _showAdminDialog();
           return;
@@ -191,8 +199,10 @@ class _LoguerScreenState extends State<LoguerScreen> {
         if (userLocal != null) {
           final String localDevice = (userLocal['device'] ?? '').toString().trim();
 
-          // Omitir device también offline si es Web/Safari
-          if (!kIsWeb && localDevice.isNotEmpty && localDevice != _deviceIdentifier) {
+          // Omitir device también offline si es Web o Computadora
+          if (!_esWebOEscritorio &&
+              localDevice.isNotEmpty &&
+              localDevice != _deviceIdentifier) {
             if (mounted) setState(() => _isLoading = false);
             _showAdminDialog();
             return;
@@ -245,7 +255,7 @@ class _LoguerScreenState extends State<LoguerScreen> {
                 ),
                 const SizedBox(height: 10),
                 const Text(
-                  "Tu dispositivo o usuario no se encuentra en estado ACTIVO. Copiá el identificador y envialo al administrador.",
+                  "Tu dispositivo móvil o usuario no se encuentra acreditado. Copiá el identificador y envialo al administrador.",
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontSize: 13,
@@ -330,25 +340,14 @@ class _LoguerScreenState extends State<LoguerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final double ancho = MediaQuery.of(context).size.width;
+    final bool esDesktop = ancho >= 700;
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
       body: SafeArea(
         child: Stack(
           children: [
-            Positioned(
-              top: 16,
-              left: 20,
-              child: Row(
-                children: const [
-                  Icon(Icons.person_outline,
-                      size: 18, color: AgroTheme.colorTextSecondary),
-                  SizedBox(width: 6),
-                  Text('',
-                      style: TextStyle(
-                          color: AgroTheme.colorTextSecondary, fontSize: 12)),
-                ],
-              ),
-            ),
             Positioned(
               top: 16,
               right: 20,
@@ -362,160 +361,162 @@ class _LoguerScreenState extends State<LoguerScreen> {
             ),
             Center(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 28.0),
-                child: Form(
-                  key: _formKey,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 88,
-                        height: 88,
-                        decoration: BoxDecoration(
-                          color: AgroTheme.colorSurface,
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: AgroTheme.colorBorder),
-                          boxShadow: const [
-                            BoxShadow(
-                                color: Color(0x08141E18),
-                                blurRadius: 20,
-                                offset: Offset(0, 8))
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(22),
-                          child: Image.asset(
-                            'logo/logo.png',
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) =>
-                                const Icon(Icons.agriculture_rounded,
-                                    size: 44, color: AgroTheme.colorAccent),
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: esDesktop ? 460 : 380),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 84,
+                          height: 84,
+                          decoration: BoxDecoration(
+                            color: AgroTheme.colorSurface,
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: AgroTheme.colorBorder),
+                            boxShadow: const [
+                              BoxShadow(
+                                  color: Color(0x08141E18),
+                                  blurRadius: 20,
+                                  offset: Offset(0, 8))
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(22),
+                            child: Image.asset(
+                              'logo/logo.png',
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) =>
+                                  const Icon(Icons.agriculture_rounded,
+                                      size: 40, color: AgroTheme.colorAccent),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        "GESTION DE CAMPO",
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: AgroTheme.colorText,
-                          letterSpacing: -0.3,
+                        const SizedBox(height: 14),
+                        const Text(
+                          "GESTION DE CAMPO",
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: AgroTheme.colorText,
+                            letterSpacing: -0.3,
+                          ),
                         ),
-                      ),
-                      const Text(
-                        "AgroSoft · Soluciones Integrales",
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: AgroTheme.colorTextSecondary,
-                            fontWeight: FontWeight.w500),
-                      ),
-                      const SizedBox(height: 6),
-                      // En web / Safari muestra el modo navegador; en app nativa muestra el Device ID
-                      Text(
-                        kIsWeb
-                            ? "Plataforma: Safari Web / PWA"
-                            : "Device ID: $_deviceIdentifier",
-                        style: const TextStyle(
-                            fontSize: 11, color: AgroTheme.colorTextSecondary),
-                      ),
-                      const SizedBox(height: 32),
-                      Container(
-                        padding: const EdgeInsets.all(26),
-                        decoration: BoxDecoration(
-                          color: AgroTheme.colorSurface,
-                          borderRadius:
-                              BorderRadius.circular(AgroTheme.radiusLg),
-                          border: Border.all(color: AgroTheme.colorBorder),
-                          boxShadow: const [
-                            BoxShadow(
-                                color: Color(0x0A141E18),
-                                blurRadius: 30,
-                                offset: Offset(0, 10))
-                          ],
+                        const Text(
+                          "AgroSoft · Soluciones Integrales",
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: AgroTheme.colorTextSecondary,
+                              fontWeight: FontWeight.w500),
                         ),
-                        child: Column(
-                          children: [
-                            TextFormField(
-                              controller: _emailController,
-                              keyboardType: TextInputType.emailAddress,
-                              style: const TextStyle(
-                                  color: AgroTheme.colorText, fontSize: 14),
-                              decoration: InputDecoration(
-                                hintText: "Email u Usuario",
-                                hintStyle: const TextStyle(
-                                    color: AgroTheme.colorTextSecondary,
-                                    fontSize: 14),
-                                prefixIcon: const Icon(Icons.mail_outline,
-                                    size: 20,
-                                    color: AgroTheme.colorTextSecondary),
-                                filled: true,
-                                fillColor: AgroTheme.colorBg,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(
-                                      AgroTheme.radiusMd),
-                                  borderSide: BorderSide.none,
+                        const SizedBox(height: 6),
+                        Text(
+                          _esWebOEscritorio
+                              ? "Entorno: Acceso Directo Web / PC"
+                              : "Dispositivo Móvil: $_deviceIdentifier",
+                          style: const TextStyle(
+                              fontSize: 11, color: AgroTheme.colorTextSecondary),
+                        ),
+                        const SizedBox(height: 28),
+                        Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: AgroTheme.colorSurface,
+                            borderRadius:
+                                BorderRadius.circular(AgroTheme.radiusLg),
+                            border: Border.all(color: AgroTheme.colorBorder),
+                            boxShadow: const [
+                              BoxShadow(
+                                  color: Color(0x0A141E18),
+                                  blurRadius: 30,
+                                  offset: Offset(0, 10))
+                            ],
+                          ),
+                          child: Column(
+                            children: [
+                              TextFormField(
+                                controller: _emailController,
+                                keyboardType: TextInputType.emailAddress,
+                                style: const TextStyle(
+                                    color: AgroTheme.colorText, fontSize: 14),
+                                decoration: InputDecoration(
+                                  hintText: "Email u Usuario",
+                                  hintStyle: const TextStyle(
+                                      color: AgroTheme.colorTextSecondary,
+                                      fontSize: 14),
+                                  prefixIcon: const Icon(Icons.mail_outline,
+                                      size: 20,
+                                      color: AgroTheme.colorTextSecondary),
+                                  filled: true,
+                                  fillColor: AgroTheme.colorBg,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                        AgroTheme.radiusMd),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                                validator: (val) => val == null || val.trim().isEmpty
+                                    ? "Ingresá tu correo u usuario"
+                                    : null,
+                              ),
+                              const SizedBox(height: 16),
+                              TextFormField(
+                                controller: _passwordController,
+                                obscureText: true,
+                                style: const TextStyle(
+                                    color: AgroTheme.colorText, fontSize: 14),
+                                decoration: InputDecoration(
+                                  hintText: "Contraseña",
+                                  hintStyle: const TextStyle(
+                                      color: AgroTheme.colorTextSecondary,
+                                      fontSize: 14),
+                                  prefixIcon: const Icon(Icons.lock_outline,
+                                      size: 20,
+                                      color: AgroTheme.colorTextSecondary),
+                                  filled: true,
+                                  fillColor: AgroTheme.colorBg,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                        AgroTheme.radiusMd),
+                                    borderSide: BorderSide.none,
+                                  ),
+                                ),
+                                validator: (val) => val == null || val.trim().isEmpty
+                                    ? "Ingresá tu contraseña"
+                                    : null,
+                              ),
+                              const SizedBox(height: 22),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: SoftButton(
+                                  onTap: _isLoading ? null : _login,
+                                  child: Center(
+                                    child: _isLoading
+                                        ? const SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                                color: Colors.white,
+                                                strokeWidth: 2.2),
+                                          )
+                                        : const Text(
+                                            "Iniciar Sesión",
+                                            style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w700),
+                                          ),
+                                  ),
                                 ),
                               ),
-                              validator: (val) => val == null || val.trim().isEmpty
-                                  ? "Ingresá tu correo u usuario"
-                                  : null,
-                            ),
-                            const SizedBox(height: 16),
-                            TextFormField(
-                              controller: _passwordController,
-                              obscureText: true,
-                              style: const TextStyle(
-                                  color: AgroTheme.colorText, fontSize: 14),
-                              decoration: InputDecoration(
-                                hintText: "Contraseña",
-                                hintStyle: const TextStyle(
-                                    color: AgroTheme.colorTextSecondary,
-                                    fontSize: 14),
-                                prefixIcon: const Icon(Icons.lock_outline,
-                                    size: 20,
-                                    color: AgroTheme.colorTextSecondary),
-                                filled: true,
-                                fillColor: AgroTheme.colorBg,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(
-                                      AgroTheme.radiusMd),
-                                  borderSide: BorderSide.none,
-                                ),
-                              ),
-                              validator: (val) => val == null || val.trim().isEmpty
-                                  ? "Ingresá tu contraseña"
-                                  : null,
-                            ),
-                            const SizedBox(height: 24),
-                            SizedBox(
-                              width: double.infinity,
-                              height: 52,
-                              child: SoftButton(
-                                onTap: _isLoading ? null : _login,
-                                child: Center(
-                                  child: _isLoading
-                                      ? const SizedBox(
-                                          width: 22,
-                                          height: 22,
-                                          child: CircularProgressIndicator(
-                                              color: Colors.white,
-                                              strokeWidth: 2.2),
-                                        )
-                                      : const Text(
-                                          "Iniciar Sesión",
-                                          style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w700),
-                                        ),
-                                ),
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

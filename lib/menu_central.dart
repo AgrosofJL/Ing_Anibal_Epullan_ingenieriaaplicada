@@ -44,13 +44,12 @@ class _MenuCentralState extends State<MenuCentral>
     _inicializarSesionYContexto();
   }
 
- void _handleSyncAnimation() {
+  void _handleSyncAnimation() {
     if (ServicioSincronizacion.estaSincronizando.value) {
       _rotationController.repeat();
     } else {
       _rotationController.stop();
       _rotationController.reset();
-      // 💡 ACA ES LO NUEVO: Re-inicializar sesión completa tras la sincronización
       _inicializarSesionYContexto();
     }
   }
@@ -67,20 +66,18 @@ class _MenuCentralState extends State<MenuCentral>
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _userName = prefs.getString('userName') ?? "Juan Sosa";
-      _userRole = (prefs.getString('userRole') ?? "OPERARIO").toUpperCase();
+      _userRole = (prefs.getString('userRole') ?? "OPERARIO").toUpperCase().trim();
       _userCodProductor = prefs.getInt('userCodProductor') ?? 0;
     });
 
     await _cargarProductores();
   }
 
-  // 💡 ESTO LO MODIFIQUE: Filtro de permisos estricto según rol de usuario
   Future<void> _cargarProductores() async {
     final db = await DatabaseHelper.instance.database;
     List<Map<String, dynamic>> prods = [];
 
     if (_esIngenieroOAdmin) {
-      // Ingeniero / Admin global ve todos los productores habilitados
       prods = await db.query(
         'productores',
         where: 'estado = ?',
@@ -88,7 +85,6 @@ class _MenuCentralState extends State<MenuCentral>
         orderBy: 'productor ASC',
       );
     } else {
-      // Productor local / Operario solo consulta su propio establecimiento
       prods = await db.query(
         'productores',
         where: 'cod_productor = ? AND estado = ?',
@@ -105,8 +101,10 @@ class _MenuCentralState extends State<MenuCentral>
       if (_esIngenieroOAdmin) {
         if (_listaProductores.isNotEmpty) {
           if (_selectedCodProductor == null ||
-              !_listaProductores.any((p) => p['cod_productor'] == _selectedCodProductor)) {
-            _selectedCodProductor = _listaProductores.first['cod_productor'] as int;
+              !_listaProductores
+                  .any((p) => p['cod_productor'] == _selectedCodProductor)) {
+            _selectedCodProductor =
+                _listaProductores.first['cod_productor'] as int;
           }
           _productorActivo = _listaProductores.firstWhere(
             (p) => p['cod_productor'] == _selectedCodProductor,
@@ -117,13 +115,9 @@ class _MenuCentralState extends State<MenuCentral>
           _selectedCodProductor = null;
         }
       } else {
-        // 💡 Forzar el código actualizado tras la sincronización
         _selectedCodProductor = _userCodProductor;
         if (_listaProductores.isNotEmpty) {
-          _productorActivo = _listaProductores.firstWhere(
-            (p) => p['cod_productor'] == _userCodProductor,
-            orElse: () => _listaProductores.first,
-          );
+          _productorActivo = _listaProductores.first;
         } else {
           _productorActivo = {
             'cod_productor': _userCodProductor,
@@ -167,7 +161,7 @@ class _MenuCentralState extends State<MenuCentral>
   }
 
   bool get _esIngenieroOAdmin =>
-      _userRole == 'INGENIERO' || _userRole == 'ADMIN';
+      _userRole == 'INGENIERO' || _userRole == 'ADMIN' || _userRole == 'ADM';
 
   int get _codProductorActivo =>
       _selectedCodProductor ??
@@ -178,18 +172,36 @@ class _MenuCentralState extends State<MenuCentral>
 
   @override
   Widget build(BuildContext context) {
+    final double ancho = MediaQuery.of(context).size.width;
+    final bool esDesktop = ancho >= 1150;
+    final bool esTablet = ancho >= 720 && ancho < 1150;
+
+    int crossAxisCount = 1;
+    double childAspectRatio = 2.4;
+
+    if (esDesktop) {
+      crossAxisCount = 3;
+      childAspectRatio = 1.65;
+    } else if (esTablet) {
+      crossAxisCount = 2;
+      childAspectRatio = 1.85;
+    } else {
+      crossAxisCount = 1;
+      childAspectRatio = ancho < 380 ? 2.1 : 2.5;
+    }
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
       body: SafeArea(
         child: Column(
           children: [
-            // =========================================================
-            // BARRA SUPERIOR APPLE SOFT
-            // =========================================================
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              padding: EdgeInsets.symmetric(
+                horizontal: esDesktop ? 36 : 20,
+                vertical: 12,
+              ),
               decoration: BoxDecoration(
-                color: AgroTheme.colorSurface.withOpacity(0.92),
+                color: AgroTheme.colorSurface.withOpacity(0.94),
                 border: const Border(
                   bottom: BorderSide(color: AgroTheme.colorBorder, width: 1),
                 ),
@@ -201,8 +213,8 @@ class _MenuCentralState extends State<MenuCentral>
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                        width: 42,
-                        height: 42,
+                        width: 44,
+                        height: 44,
                         decoration: BoxDecoration(
                           color: AgroTheme.colorSurface,
                           borderRadius: BorderRadius.circular(12),
@@ -232,7 +244,7 @@ class _MenuCentralState extends State<MenuCentral>
                               letterSpacing: -0.3,
                             ),
                           ),
-                          const SizedBox(height: 1),
+                          const SizedBox(height: 2),
                           Row(
                             children: [
                               Text(
@@ -243,10 +255,10 @@ class _MenuCentralState extends State<MenuCentral>
                                   color: AgroTheme.colorTextSecondary,
                                 ),
                               ),
-                              const SizedBox(width: 6),
+                              const SizedBox(width: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 1),
+                                    horizontal: 7, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: _esIngenieroOAdmin
                                       ? AgroTheme.colorGoldSoft
@@ -256,7 +268,7 @@ class _MenuCentralState extends State<MenuCentral>
                                 child: Text(
                                   _userRole,
                                   style: TextStyle(
-                                    fontSize: 9,
+                                    fontSize: 9.5,
                                     fontWeight: FontWeight.w800,
                                     color: _esIngenieroOAdmin
                                         ? const Color(0xFF8A6A1E)
@@ -297,7 +309,7 @@ class _MenuCentralState extends State<MenuCentral>
                           );
                         },
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: 8),
                       IconButton(
                         icon: const Icon(Icons.logout_rounded,
                             size: 20, color: AgroTheme.colorTextSecondary),
@@ -309,164 +321,171 @@ class _MenuCentralState extends State<MenuCentral>
                 ],
               ),
             ),
-
-            // ==========================================
-            // CONTENIDO PRINCIPAL
-            // ==========================================
             Expanded(
-              child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _getFormattedDate(),
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w800,
-                        color: AgroTheme.colorTextSecondary,
-                        letterSpacing: 0.3,
-                      ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1360),
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: esDesktop ? 36 : 20,
+                      vertical: 20,
                     ),
-                    const SizedBox(height: 12),
-
-                    _buildTarjetaProductorProfesional(),
-
-                    const SizedBox(height: 24),
-
-                    const Text(
-                      "Módulos Operativos",
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: AgroTheme.colorText,
-                        letterSpacing: -0.4,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _esIngenieroOAdmin
-                          ? "Gestión técnica sobre el establecimiento de $_nombreProductorActivo."
-                          : "Acciones agronómicas para tu campo.",
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AgroTheme.colorTextSecondary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    GridView.count(
-                      crossAxisCount:
-                          MediaQuery.of(context).size.width > 600 ? 2 : 1,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16,
-                      childAspectRatio:
-                          MediaQuery.of(context).size.width > 600 ? 1.6 : 2.2,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        ModuloCardItem(
-                          titulo: "Nueva Receta",
-                          descripcion:
-                              "Carga de aplicaciones foliares, dosificación de máquina y hectárea.",
-                          icono: Icons.note_alt_outlined,
-                          esAdmin: false,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => AplicaProductorScreen(
-                                  codProductor: _codProductorActivo,
-                                  nombreProductor: _nombreProductorActivo,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        ModuloCardItem(
-                          titulo: "Gestión en Campo",
-                          descripcion:
-                              "Monitoreo fenológico, ubicación de trampas, capturas y cuarteles.",
-                          icono: Icons.park_outlined,
-                          esAdmin: false,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => MenuCampoScreen(
-                                  codProductor: _codProductorActivo,
-                                  nombreProductor: _nombreProductorActivo,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        ModuloCardItem(
-                          titulo: "Catálogo de Insumos",
-                          descripcion:
-                              "Stock disponible, principios activos y tiempos de carencia.",
-                          icono: Icons.science_outlined,
-                          esAdmin: false,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const CatalogoInsumosScreen(),
-                              ),
-                            );
-                          },
-                        ),
-                        ModuloCardItem(
-                          titulo: "Reportería",
-                          descripcion:
-                              "Cuaderno de campo, informes de capturas, fenología y Excel oficial.",
-                          icono: Icons.assessment_outlined,
-                          esAdmin: false,
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => MenuReportesScreen(
-                                  codProductor: _codProductorActivo,
-                                  nombreProductor: _nombreProductorActivo,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        if (_userRole == 'ADMIN' || _userRole == 'INGENIERO')
-                          ModuloCardItem(
-                            titulo: "Gestión de Productores",
-                            descripcion:
-                                "Administración de RENSPA, CUITs y usuarios independientes.",
-                            icono: Icons.badge_outlined,
-                            esAdmin: true,
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const ProductoresScreen(),
-                                ),
-                              );
-                            },
+                        Text(
+                          _getFormattedDate(),
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            color: AgroTheme.colorTextSecondary,
+                            letterSpacing: 0.4,
                           ),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildTarjetaProductorProfesional(),
+                        const SizedBox(height: 28),
+                        const Text(
+                          "Módulos Operativos",
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: AgroTheme.colorText,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _esIngenieroOAdmin
+                              ? "Gestión técnica sobre el establecimiento de $_nombreProductorActivo."
+                              : "Acciones agronómicas para tu campo.",
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: AgroTheme.colorTextSecondary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        GridView.count(
+                          crossAxisCount: crossAxisCount,
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: childAspectRatio,
+                          children: [
+                            ModuloCardItem(
+                              titulo: "Nueva Receta",
+                              subtitulo: "APLICACIÓN & CALDOS",
+                              descripcion:
+                                  "Carga de aplicaciones foliares, dosificación de máquina y hectárea.",
+                              icono: Icons.note_alt_outlined,
+                              accentColor: const Color(0xFF1E6B4C),
+                              tag: "Labor Activa",
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AplicaProductorScreen(
+                                      codProductor: _codProductorActivo,
+                                      nombreProductor: _nombreProductorActivo,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            ModuloCardItem(
+                              titulo: "Gestión en Campo",
+                              subtitulo: "MONITOREO & FENOLOGÍA",
+                              descripcion:
+                                  "Monitoreo fenológico, ubicación de trampas, capturas y cuarteles.",
+                              icono: Icons.park_outlined,
+                              accentColor: const Color(0xFF10B981),
+                              tag: "Sanidad",
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => MenuCampoScreen(
+                                      codProductor: _codProductorActivo,
+                                      nombreProductor: _nombreProductorActivo,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            ModuloCardItem(
+                              titulo: "Catálogo de Insumos",
+                              subtitulo: "PRINCIPIOS ACTIVOS & STOCK",
+                              descripcion:
+                                  "Stock disponible, principios activos y tiempos de carencia.",
+                              icono: Icons.science_outlined,
+                              accentColor: const Color(0xFF3B82F6),
+                              tag: "Insumos",
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const CatalogoInsumosScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                            ModuloCardItem(
+                              titulo: "Reportería",
+                              subtitulo: "REGISTROS & AUDITORÍA",
+                              descripcion:
+                                  "Cuaderno de campo, informes de capturas, fenología y Excel oficial.",
+                              icono: Icons.assessment_outlined,
+                              accentColor: const Color(0xFFD97706),
+                              tag: "Oficial BPA",
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => MenuReportesScreen(
+                                      codProductor: _codProductorActivo,
+                                      nombreProductor: _nombreProductorActivo,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            if (_userRole == 'ADMIN' || _userRole == 'INGENIERO')
+                              ModuloCardItem(
+                                titulo: "Gestión de Productores",
+                                subtitulo: "ADMINISTRACIÓN GENERAL",
+                                descripcion:
+                                    "Administración de RENSPA, CUITs y usuarios independientes.",
+                                icono: Icons.badge_outlined,
+                                accentColor: const Color(0xFF8A6A1E),
+                                esAdmin: true,
+                                tag: "Panel Global",
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const ProductoresScreen(),
+                                    ),
+                                  );
+                                },
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 36),
+                        const Center(
+                          child: Text(
+                            "AgroSoft J&L · Soluciones Integrales",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AgroTheme.colorTextSecondary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
-                    const SizedBox(height: 32),
-
-                    const Center(
-                      child: Text(
-                        "AgroSoft J&L · Soluciones Integrales",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AgroTheme.colorTextSecondary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -476,16 +495,15 @@ class _MenuCentralState extends State<MenuCentral>
     );
   }
 
-  // 💡 Tarjeta de productor con selector visible exclusivamente si es Ingeniero o Administrador
   Widget _buildTarjetaProductorProfesional() {
-    final String nombre = _productorActivo?['productor'] ?? 'Sin Productor Asignado';
+    final String nombre = _productorActivo?['productor'] ?? 'Sin Productor';
     final String cuit = _productorActivo?['cuit'] ?? 'S/D';
     final String renspa = _productorActivo?['renspa'] ?? 'S/D';
     final String localidad =
         _productorActivo?['localidad'] ?? 'Ubicación no especificada';
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: AgroTheme.colorSurface,
         borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
@@ -493,7 +511,7 @@ class _MenuCentralState extends State<MenuCentral>
         boxShadow: const [
           BoxShadow(
             color: Color(0x06141E18),
-            blurRadius: 12,
+            blurRadius: 16,
             offset: Offset(0, 4),
           )
         ],
@@ -507,23 +525,23 @@ class _MenuCentralState extends State<MenuCentral>
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    width: 42,
+                    height: 42,
                     decoration: BoxDecoration(
                       color: _esIngenieroOAdmin
                           ? AgroTheme.colorGoldSoft
                           : AgroTheme.colorAccentSoft,
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
                       Icons.agriculture_rounded,
                       color: _esIngenieroOAdmin
                           ? const Color(0xFF8A6A1E)
                           : AgroTheme.colorAccentDark,
-                      size: 20,
+                      size: 22,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -535,13 +553,14 @@ class _MenuCentralState extends State<MenuCentral>
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
                           color: AgroTheme.colorTextSecondary,
-                          letterSpacing: 0.5,
+                          letterSpacing: 0.6,
                         ),
                       ),
+                      const SizedBox(height: 2),
                       Text(
                         nombre,
                         style: const TextStyle(
-                          fontSize: 15.5,
+                          fontSize: 16.5,
                           fontWeight: FontWeight.w800,
                           color: AgroTheme.colorText,
                         ),
@@ -553,7 +572,7 @@ class _MenuCentralState extends State<MenuCentral>
               if (_esIngenieroOAdmin && _listaProductores.length > 1)
                 Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: AgroTheme.colorBg,
                     borderRadius: BorderRadius.circular(8),
@@ -562,7 +581,7 @@ class _MenuCentralState extends State<MenuCentral>
                   child: const Text(
                     "Cambiar",
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 11.5,
                       fontWeight: FontWeight.w700,
                       color: AgroTheme.colorAccentDark,
                     ),
@@ -570,9 +589,7 @@ class _MenuCentralState extends State<MenuCentral>
                 ),
             ],
           ),
-          const SizedBox(height: 12),
-
-          // 💡 Dropdown visible únicamente para rol INGENIERO / ADMIN con más de 1 productor
+          const SizedBox(height: 14),
           if (_esIngenieroOAdmin && _listaProductores.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
@@ -610,7 +627,7 @@ class _MenuCentralState extends State<MenuCentral>
                           Text(
                             "CUIT: $pCuit",
                             style: const TextStyle(
-                              fontSize: 11,
+                              fontSize: 11.5,
                               color: AgroTheme.colorTextSecondary,
                               fontWeight: FontWeight.w500,
                             ),
@@ -623,9 +640,7 @@ class _MenuCentralState extends State<MenuCentral>
                 ),
               ),
             ),
-
           const SizedBox(height: 12),
-
           Wrap(
             spacing: 8,
             runSpacing: 6,
@@ -642,21 +657,21 @@ class _MenuCentralState extends State<MenuCentral>
 
   Widget _buildMetaTag(IconData icono, String texto) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4.5),
       decoration: BoxDecoration(
         color: AgroTheme.colorBg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AgroTheme.colorBorder.withOpacity(0.6)),
+        border: Border.all(color: AgroTheme.colorBorder.withOpacity(0.7)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icono, size: 12, color: AgroTheme.colorTextSecondary),
-          const SizedBox(width: 4),
+          Icon(icono, size: 13, color: AgroTheme.colorTextSecondary),
+          const SizedBox(width: 5),
           Text(
             texto,
             style: const TextStyle(
-              fontSize: 11,
+              fontSize: 11.5,
               fontWeight: FontWeight.w600,
               color: AgroTheme.colorTextSecondary,
             ),
@@ -669,17 +684,23 @@ class _MenuCentralState extends State<MenuCentral>
 
 class ModuloCardItem extends StatefulWidget {
   final String titulo;
+  final String subtitulo;
   final String descripcion;
   final IconData icono;
+  final Color accentColor;
+  final String tag;
   final bool esAdmin;
   final VoidCallback onTap;
 
   const ModuloCardItem({
     super.key,
     required this.titulo,
+    required this.subtitulo,
     required this.descripcion,
     required this.icono,
-    required this.esAdmin,
+    required this.accentColor,
+    required this.tag,
+    this.esAdmin = false,
     required this.onTap,
   });
 
@@ -688,88 +709,136 @@ class ModuloCardItem extends StatefulWidget {
 }
 
 class _ModuloCardItemState extends State<ModuloCardItem> {
+  bool _isHovered = false;
   bool _isPressed = false;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _isPressed = true),
-      onTapUp: (_) => setState(() => _isPressed = false),
-      onTapCancel: () => setState(() => _isPressed = false),
-      onTap: widget.onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        transform: Matrix4.identity()..scale(_isPressed ? 0.98 : 1.0),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: _isPressed ? AgroTheme.colorActiveBg : AgroTheme.colorSurface,
-          borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
-          border: Border.all(
-            color:
-                _isPressed ? AgroTheme.colorActiveBorder : AgroTheme.colorBorder,
-            width: 1.2,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _isPressed = true),
+        onTapUp: (_) => setState(() => _isPressed = false),
+        onTapCancel: () => setState(() => _isPressed = false),
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.identity()
+            ..scale(_isPressed
+                ? 0.985
+                : (_isHovered ? 1.01 : 1.0)),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: _isPressed
+                ? AgroTheme.colorActiveBg
+                : (_isHovered ? Colors.white : AgroTheme.colorSurface),
+            borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
+            border: Border.all(
+              color: _isPressed
+                  ? AgroTheme.colorActiveBorder
+                  : (_isHovered
+                      ? widget.accentColor.withOpacity(0.5)
+                      : AgroTheme.colorBorder),
+              width: _isHovered || _isPressed ? 1.4 : 1.1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _isHovered
+                    ? widget.accentColor.withOpacity(0.12)
+                    : const Color(0x06141E18),
+                blurRadius: _isHovered ? 18 : 10,
+                offset: Offset(0, _isHovered ? 6 : 3),
+              ),
+            ],
           ),
-          boxShadow: _isPressed
-              ? [
-                  BoxShadow(
-                    color: const Color(0xFFFBC02D).withOpacity(0.35),
-                    blurRadius: 8,
-                    spreadRadius: 1,
-                    offset: const Offset(0, 2),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: widget.accentColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: widget.accentColor.withOpacity(0.25),
+                        width: 1,
+                      ),
+                    ),
+                    child: Icon(
+                      widget.icono,
+                      color: widget.accentColor,
+                      size: 24,
+                    ),
                   ),
-                ]
-              : const [
-                  BoxShadow(
-                    color: Color(0x08141E18),
-                    blurRadius: 12,
-                    offset: Offset(0, 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3.5),
+                    decoration: BoxDecoration(
+                      color: widget.accentColor.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: widget.accentColor.withOpacity(0.2),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Text(
+                      widget.tag,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: widget.accentColor,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
                   ),
                 ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: widget.esAdmin
-                    ? AgroTheme.colorGoldSoft
-                    : AgroTheme.colorAccentSoft,
-                borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(
-                widget.icono,
-                color: widget.esAdmin
-                    ? const Color(0xFF8A6A1E)
-                    : AgroTheme.colorAccentDark,
-                size: 22,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.subtitulo,
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w800,
+                      color: widget.accentColor,
+                      letterSpacing: 0.7,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.titulo,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                      color: AgroTheme.colorText,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    widget.descripcion,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AgroTheme.colorTextSecondary,
+                      height: 1.35,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.titulo,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15.5,
-                    color: AgroTheme.colorText,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  widget.descripcion,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AgroTheme.colorTextSecondary,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

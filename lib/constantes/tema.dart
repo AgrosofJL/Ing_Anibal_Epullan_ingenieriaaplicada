@@ -14,9 +14,12 @@ class AgroTheme {
   static const Color colorDanger = Color(0xFFC0483C);
   static const Color colorBorder = Color(0x1A1B231D); // rgba(27, 35, 29, 0.10)
 
+
+  static const Color colorActiveBorder = Color(0xFFA5D6A7);
+
   // Estados interactivos / pulsado
   static const Color colorActiveBg = Color(0xFFFFFDE7);
-  static const Color colorActiveBorder = Color(0xFFFBC02D);
+
 
   static const double radiusLg = 24.0;
   static const double radiusMd = 14.0;

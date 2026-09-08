@@ -1,7 +1,18 @@
+import 'dart:io';
+import 'package:excel/excel.dart' hide Border;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
+
+import 'dart:io';
+import 'package:excel/excel.dart' hide Border;
+import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
@@ -40,7 +51,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
     await _cargarRegistrosAplicaciones();
   }
 
-  // 💡 Agrupamos por Tirada: FECHA | CUADROS | SUP TOTAL | TRACTORISTA | MAQUINA | LITROS
   Future<void> _cargarRegistrosAplicaciones() async {
     setState(() => _cargando = true);
     final db = await DatabaseHelper.instance.database;
@@ -55,7 +65,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
       orderBy: 'registro DESC',
     );
 
-    // Agrupamos filas en conjuntos de labor para condensar la tabla
     final Map<String, List<Map<String, dynamic>>> mapaTiradas = {};
     for (var f in filas) {
       final key =
@@ -70,7 +79,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
     mapaTiradas.forEach((k, lista) {
       final cab = lista.first;
 
-      // Consolidar cuadros únicos y superficie total
       final Set<String> cuadrosSet = {};
       final Set<String> clavesCuartelUnico = {};
       double supTotalTirada = 0.0;
@@ -81,7 +89,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
         final vr = reg['variedad']?.toString() ?? '';
         if (cd.isNotEmpty) cuadrosSet.add(cd);
 
-        // Sumar hectáreas y litros una sola vez por combinación cuadro+variedad (evitar duplicar por cada producto)
         final String cKey = "${cd}__$vr";
         if (!clavesCuartelUnico.contains(cKey)) {
           clavesCuartelUnico.add(cKey);
@@ -119,18 +126,329 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
     });
   }
 
-  // ==========================================================================
-  // 💡 MODAL CON FILTRO EN CASCADA: CULTIVO ➔ VARIEDAD ➔ CUADROS
-  // ==========================================================================
+  Future<void> _exportarExcelLabor() async {
+    try {
+      final excel = Excel.createExcel();
+
+      // Estilos de encabezados
+      final headerVerde = CellStyle(
+        bold: true,
+        fontColorHex: ExcelColor.white,
+        backgroundColorHex: ExcelColor.fromHexString('#1E6B4C'),
+        horizontalAlign: HorizontalAlign.Center,
+      );
+
+      final headerAzul = CellStyle(
+        bold: true,
+        fontColorHex: ExcelColor.white,
+        backgroundColorHex: ExcelColor.fromHexString('#1565C0'),
+        horizontalAlign: HorizontalAlign.Center,
+      );
+
+      final headerDorado = CellStyle(
+        bold: true,
+        fontColorHex: ExcelColor.fromHexString('#1A2E22'),
+        backgroundColorHex: ExcelColor.fromHexString('#FFE082'),
+        horizontalAlign: HorizontalAlign.Center,
+      );
+
+      final estiloTotal = CellStyle(
+        bold: true,
+        fontColorHex: ExcelColor.fromHexString('#1E6B4C'),
+        backgroundColorHex: ExcelColor.fromHexString('#E8F5E9'),
+      );
+
+      // =======================================================================
+      // HOJA 1: REGISTROS_DETALLE (Tiradas y labores individuales)
+      // =======================================================================
+      final sheetDetalle = excel['Registros_Detalle'];
+      excel.delete('Sheet1');
+
+      final headersDetalle = [
+        'Registro',
+        'Fecha',
+        'Chacra',
+        'Cuadro',
+        'Variedad',
+        'Sup (Ha)',
+        'Tractorista',
+        'Pulverizadora',
+        'Caldo (L)',
+        'Vol/Ha (L/Ha)',
+        'Producto',
+        'Dosis / 100L',
+        'Consumo Insumo (L/Kg)'
+      ];
+
+      for (int i = 0; i < headersDetalle.length; i++) {
+        final cell = sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = TextCellValue(headersDetalle[i]);
+        cell.cellStyle = headerVerde;
+      }
+
+      int rowIdx1 = 1;
+      final List<Map<String, dynamic>> todasLasFilas = [];
+
+      for (var tirada in _registrosAgrupados) {
+        final List<Map<String, dynamic>> filas =
+            (tirada['filas'] as List).cast<Map<String, dynamic>>();
+
+        for (var f in filas) {
+          todasLasFilas.add(f);
+
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx1)).value =
+              TextCellValue(f['registro']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx1)).value =
+              TextCellValue(f['fecha']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx1)).value =
+              TextCellValue(f['chacra']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx1)).value =
+              TextCellValue(f['cuadros']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx1)).value =
+              TextCellValue(f['variedad']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx1)).value =
+              DoubleCellValue(double.tryParse(f['sup_aplic']?.toString() ?? '0') ?? 0.0);
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx1)).value =
+              TextCellValue(f['tractorista']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx1)).value =
+              TextCellValue(f['pulverizadora']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx1)).value =
+              DoubleCellValue(double.tryParse(f['litros']?.toString() ?? '0') ?? 0.0);
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx1)).value =
+              DoubleCellValue(double.tryParse(f['vol_aplic_ha']?.toString() ?? '0') ?? 0.0);
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIdx1)).value =
+              TextCellValue(f['producto']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx1)).value =
+              TextCellValue(f['dosis_100']?.toString() ?? '');
+          sheetDetalle.cell(CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx1)).value =
+              DoubleCellValue(double.tryParse(f['consumo_prod']?.toString() ?? '0') ?? 0.0);
+          rowIdx1++;
+        }
+      }
+
+      // =======================================================================
+      // HOJA 2: APLICACION_CUADRO (Acumulado por Cuadro y Variedad)
+      // =======================================================================
+      final sheetCuadros = excel['Aplicacion_Cuadro'];
+
+      final headersCuadros = [
+        'Chacra',
+        'Cuadro',
+        'Variedad',
+        'Superficie Total (Ha)',
+        'Total Caldo Aplicado (L)',
+        'Promedio Vol/Ha (L/Ha)',
+        'Cantidad Labores'
+      ];
+
+      for (int i = 0; i < headersCuadros.length; i++) {
+        final cell = sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = TextCellValue(headersCuadros[i]);
+        cell.cellStyle = headerAzul;
+      }
+
+      // Agrupación por clave única: Chacra + Cuadro + Variedad + Fecha/Labor
+      final Map<String, Map<String, dynamic>> acumuladoCuadros = {};
+      final Set<String> combinacionesTiradaCuartel = {};
+
+      for (var f in todasLasFilas) {
+        final ch = f['chacra']?.toString() ?? '';
+        final cd = f['cuadros']?.toString() ?? '';
+        final vr = f['variedad']?.toString() ?? '';
+        final keyCuartel = "${ch}__${cd}__$vr";
+
+        if (!acumuladoCuadros.containsKey(keyCuartel)) {
+          acumuladoCuadros[keyCuartel] = {
+            'chacra': ch,
+            'cuadro': cd,
+            'variedad': vr,
+            'sup_total': 0.0,
+            'litros_total': 0.0,
+            'labores_count': 0,
+          };
+        }
+
+        // Sumar superficie y litros únicamente una vez por tirada para evitar multiplicar por la cantidad de productos
+        final tiradaId = "${f['fecha']}__${f['tractorista']}__${f['pulverizadora']}__$keyCuartel";
+        if (!combinacionesTiradaCuartel.contains(tiradaId)) {
+          combinacionesTiradaCuartel.add(tiradaId);
+          acumuladoCuadros[keyCuartel]!['sup_total'] +=
+              double.tryParse(f['sup_aplic']?.toString() ?? '0') ?? 0.0;
+          acumuladoCuadros[keyCuartel]!['litros_total'] +=
+              double.tryParse(f['litros']?.toString() ?? '0') ?? 0.0;
+          acumuladoCuadros[keyCuartel]!['labores_count'] += 1;
+        }
+      }
+
+      int rowIdx2 = 1;
+      double granTotalSup = 0.0;
+      double granTotalCaldo = 0.0;
+
+      for (var item in acumuladoCuadros.values) {
+        final double s = item['sup_total'];
+        final double l = item['litros_total'];
+        final int c = item['labores_count'];
+        final double promLHa = s > 0 ? (l / s) : 0.0;
+
+        granTotalSup += s;
+        granTotalCaldo += l;
+
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx2)).value =
+            TextCellValue(item['chacra']);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx2)).value =
+            TextCellValue(item['cuadro']);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx2)).value =
+            TextCellValue(item['variedad']);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx2)).value =
+            DoubleCellValue(s);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx2)).value =
+            DoubleCellValue(l);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx2)).value =
+            DoubleCellValue(promLHa);
+        sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx2)).value =
+            IntCellValue(c);
+        rowIdx2++;
+      }
+
+      // Fila de Total Acumulado en Hoja 2
+      final cellTotLabel =
+          sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx2));
+      cellTotLabel.value = TextCellValue("TOTAL GENERAL");
+      cellTotLabel.cellStyle = estiloTotal;
+
+      final cellTotSup =
+          sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx2));
+      cellTotSup.value = DoubleCellValue(granTotalSup);
+      cellTotSup.cellStyle = estiloTotal;
+
+      final cellTotCaldo =
+          sheetCuadros.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx2));
+      cellTotCaldo.value = DoubleCellValue(granTotalCaldo);
+      cellTotCaldo.cellStyle = estiloTotal;
+
+      // =======================================================================
+      // HOJA 3: CONSUMOS_ORDEN (Total de Insumos gastados en la orden)
+      // =======================================================================
+      final sheetConsumos = excel['Consumos_Orden'];
+
+      final headersConsumos = [
+        'Producto / Insumo',
+        'Dosis Prescripta / 100L',
+        'Dosis Máquina (2000L)',
+        'Total Aplicado (L / Kg)',
+        'Carencia (Días)',
+        'Reingreso (Horas)'
+      ];
+
+      for (int i = 0; i < headersConsumos.length; i++) {
+        final cell = sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = TextCellValue(headersConsumos[i]);
+        cell.cellStyle = headerDorado;
+      }
+
+      // Agrupación y suma total por producto
+      final Map<String, Map<String, dynamic>> acumuladoProductos = {};
+
+      for (var f in todasLasFilas) {
+        final prod = (f['producto'] ?? 'Insumo').toString().trim();
+        final consumo = double.tryParse(f['consumo_prod']?.toString() ?? '0') ?? 0.0;
+
+        if (!acumuladoProductos.containsKey(prod)) {
+          acumuladoProductos[prod] = {
+            'producto': prod,
+            'dosis_100': f['dosis_100']?.toString() ?? '',
+            'dosis_maq': f['dosis_maq']?.toString() ?? '',
+            'total_consumido': 0.0,
+            'tc': f['tc']?.toString() ?? '-',
+            'ti': f['ti']?.toString() ?? '-',
+          };
+        }
+        acumuladoProductos[prod]!['total_consumido'] += consumo;
+      }
+
+      int rowIdx3 = 1;
+      for (var item in acumuladoProductos.values) {
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx3)).value =
+            TextCellValue(item['producto']);
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx3)).value =
+            TextCellValue(item['dosis_100']);
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx3)).value =
+            TextCellValue("${item['dosis_maq']} L/Kg");
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx3)).value =
+            DoubleCellValue(item['total_consumido']);
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx3)).value =
+            TextCellValue("${item['tc']}d");
+        sheetConsumos.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx3)).value =
+            TextCellValue("${item['ti']}hs");
+        rowIdx3++;
+      }
+
+      // =======================================================================
+      // GUARDADO Y APERTURA MULTIPLATAFORMA
+      // =======================================================================
+      final fileBytes = excel.save();
+      if (fileBytes == null) return;
+
+      Directory dir;
+      if (Platform.isWindows) {
+        dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      } else {
+        dir = await getTemporaryDirectory();
+      }
+
+      final codOrden = widget.orden['cod_orden'];
+      final String cleanProd =
+          widget.nombreProductor.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final String filePath =
+          "${dir.path}/Reporte_Orden_${codOrden}_$cleanProd.xlsx";
+
+      final file = File(filePath);
+      await file.writeAsBytes(fileBytes);
+
+      if (Platform.isWindows) {
+        await OpenFilex.open(filePath);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF1E6B4C),
+              content: Text(
+                "Libro Excel generado con 3 hojas (Detalle, Cuadros y Consumos):\n$filePath",
+              ),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      } else {
+        await Share.shareXFiles(
+          [XFile(filePath)],
+          subject:
+              "Resumen Completo Orden #$codOrden - ${widget.nombreProductor}",
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFC62828),
+          content: Text("Error al generar el libro Excel: $e"),
+        ),
+      );
+    }
+  }
+
   void _abrirModalRegistrarAplicacion() async {
     final db = await DatabaseHelper.instance.database;
     final String chacra = widget.orden['chacra'] ?? '';
     final String cuadrosStr = widget.orden['cuadros'] ?? '';
 
-    // Cuadros autorizados por el ingeniero en la orden
     final List<String> cuadrosAutorizados = cuadrosStr
         .split(',')
-        .map((e) => e.trim().replaceAll('Cuadro', '').trim())
+        .map((e) => e
+            .trim()
+            .replaceAll(RegExp(r'cuadro', caseSensitive: false), '')
+            .replaceAll('C.', '')
+            .trim())
         .where((e) => e.isNotEmpty)
         .toList();
 
@@ -161,14 +479,12 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
       return;
     }
 
-    // Extraer Cultivos y Variedades únicas disponibles en estos cuadros
     final Set<String> todosCultivos = {};
     for (var c in cuartelesInventario) {
       final cul = c['cultivo']?.toString().trim();
       if (cul != null && cul.isNotEmpty) todosCultivos.add(cul);
     }
 
-    // Filtros activos en el modal (inicialmente todos activos)
     final Set<String> cultivosFiltro = Set<String>.from(todosCultivos);
     final Set<String> variedadesFiltro = {};
 
@@ -185,7 +501,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
 
     actualizarVariedadesFiltro();
 
-    // Selección de cuarteles por id
     final Set<int> seleccionIds = {};
     for (var c in cuartelesInventario) {
       seleccionIds.add(c['id'] as int);
@@ -205,7 +520,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            // Filtrar lista visual de cuarteles según los filtros de Cultivo y Variedad
             final cuartelesVisibles = cuartelesInventario.where((c) {
               final cul = c['cultivo']?.toString().trim() ?? '';
               final vr = c['variedad']?.toString().trim() ?? '';
@@ -214,7 +528,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
               return matchCul && matchVr;
             }).toList();
 
-            // Variedades posibles para los cultivos actualmente activos
             final Set<String> variedadesDisponibles = {};
             for (var c in cuartelesInventario) {
               final cul = c['cultivo']?.toString().trim() ?? '';
@@ -224,7 +537,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
               }
             }
 
-            // Cálculo dinámico de hectáreas seleccionadas
             double supTotal = 0.0;
             for (var c in cuartelesInventario) {
               if (seleccionIds.contains(c['id'])) {
@@ -254,10 +566,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                     child: Container(
                       width: 40,
                       height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
+                      decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -269,10 +578,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                         children: [
                           const Text(
                             "Registrar Labor de Aplicación",
-                            style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 17,
-                                color: AgroTheme.colorText),
+                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: AgroTheme.colorText),
                           ),
                           Text(
                             "Orden #${widget.orden['cod_orden']} · Chacra $chacra",
@@ -294,7 +600,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 1. Datos de Maquinaria y Labor
                           Row(
                             children: [
                               Expanded(
@@ -305,9 +610,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                     labelText: "Fecha",
                                     filled: true,
                                     fillColor: AgroTheme.colorBg,
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        borderSide: BorderSide.none),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                                     prefixIcon: const Icon(Icons.calendar_today_rounded, size: 16),
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                                   ),
@@ -322,9 +625,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                     labelText: "Tractorista",
                                     filled: true,
                                     fillColor: AgroTheme.colorBg,
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        borderSide: BorderSide.none),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                                   ),
                                 ),
@@ -343,9 +644,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                     labelText: "Máquina / Pulverizadora",
                                     filled: true,
                                     fillColor: AgroTheme.colorBg,
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        borderSide: BorderSide.none),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                                   ),
                                 ),
@@ -361,9 +660,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                     labelText: "Litros Caldo (L)",
                                     filled: true,
                                     fillColor: AgroTheme.colorBg,
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                        borderSide: BorderSide.none),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
                                     prefixIcon: const Icon(Icons.water_drop_outlined, size: 16),
                                   ),
@@ -373,9 +670,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // =========================================================
-                          // 💡 FILTROS EN CASCADA: CULTIVO Y VARIEDAD
-                          // =========================================================
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
@@ -513,9 +807,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // =========================================================
-                          // LISTA MULTISELECT DE CUADROS FILTRADOS
-                          // =========================================================
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -557,10 +848,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                             Container(
                               padding: const EdgeInsets.all(16),
                               width: double.infinity,
-                              decoration: BoxDecoration(
-                                color: AgroTheme.colorBg,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
+                              decoration: BoxDecoration(color: AgroTheme.colorBg, borderRadius: BorderRadius.circular(10)),
                               child: const Center(
                                 child: Text(
                                   "No hay cuadros que coincidan con los filtros seleccionados.",
@@ -635,7 +923,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                             ),
                           const SizedBox(height: 14),
 
-                          // Indicador de Caldo L/Ha
                           Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
@@ -657,7 +944,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                     ),
                   ),
 
-                  // Botón Guardar Registros Multiplicados
                   SizedBox(
                     width: double.infinity,
                     height: 52,
@@ -681,7 +967,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                         Batch batch = db.batch();
                         int contador = 0;
 
-                        // Iteración: Cuartel x Producto
                         for (var cuartel in cuartelesSeleccionados) {
                           final double supCuartel = double.tryParse(cuartel['ha']?.toString() ?? '0') ?? 0.0;
                           final double litrosCuartel = ltrsSup * supCuartel;
@@ -753,9 +1038,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
     );
   }
 
-  // ==========================================================================
-  // 💡 MODAL DE DETALLE Y MODIFICACIÓN
-  // ==========================================================================
   void _mostrarDetalleYModificarRegistro(Map<String, dynamic> tirada) {
     final bool ordenActiva = (widget.orden['estado'] ?? 'ACTIVO') == 'ACTIVO';
     final List<Map<String, dynamic>> filas = (tirada['filas'] as List).cast<Map<String, dynamic>>();
@@ -940,6 +1222,15 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                 style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500)),
           ],
         ),
+        actions: [
+          // Botón Exportar a Excel de las Labores
+          IconButton(
+            icon: const Icon(Icons.table_view_rounded, color: Color(0xFF2E7D32)),
+            tooltip: "Exportar labores a Excel",
+            onPressed: _registrosAgrupados.isEmpty ? null : _exportarExcelLabor,
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -947,17 +1238,14 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // =========================================================
-              // CARD SUPERIOR: RECETA TÉCNICA
-              // =========================================================
               Container(
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
                   color: AgroTheme.colorSurface,
                   borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
                   border: Border.all(color: AgroTheme.colorBorder),
-                  boxShadow: [
-                    BoxShadow(color: const Color(0x06141E18), blurRadius: 10, offset: const Offset(0, 4)),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x06141E18), blurRadius: 10, offset: Offset(0, 4)),
                   ],
                 ),
                 child: Column(
@@ -970,10 +1258,10 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AgroTheme.colorText)),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(color: AgroTheme.colorAccentSoft, borderRadius: BorderRadius.circular(10)),
+                          decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(10)),
                           child: Text(
                             widget.orden['chacra'] ?? '',
-                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AgroTheme.colorAccentDark),
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF2E7D32)),
                           ),
                         ),
                       ],
@@ -1019,7 +1307,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                   children: [
                                     Expanded(flex: 3, child: Text(it['producto'] ?? '', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700))),
                                     Expanded(flex: 2, child: Text("${it['dosis_100']} L/Kg", textAlign: TextAlign.center, style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary))),
-                                    Expanded(flex: 2, child: Text("${it['dosis_maq']} L/Kg", textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AgroTheme.colorAccentDark))),
+                                    Expanded(flex: 2, child: Text("${it['dosis_maq']} L/Kg", textAlign: TextAlign.right, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF1E6B4C)))),
                                   ],
                                 ),
                               );
@@ -1033,10 +1321,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
               ),
               const SizedBox(height: 24),
 
-              // =========================================================
-              // 💡 TABLA CONDENSADA SOLICITADA:
-              // FECHA | CUADRO | SUP | TRACTORISTA | MAQUINA | LITROS
-              // =========================================================
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1047,7 +1331,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
               ),
               const SizedBox(height: 10),
 
-              // Encabezado de la tabla
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(color: AgroTheme.colorBg, borderRadius: BorderRadius.circular(8)),
@@ -1065,7 +1348,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
               const SizedBox(height: 6),
 
               _cargando
-                  ? const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: AgroTheme.colorAccent)))
+                  ? const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: Color(0xFF1E6B4C))))
                   : _registrosAgrupados.isEmpty
                       ? Container(
                           padding: const EdgeInsets.all(24),
@@ -1101,8 +1384,8 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                   color: AgroTheme.colorSurface,
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(color: AgroTheme.colorBorder),
-                                  boxShadow: [
-                                    BoxShadow(color: const Color(0x04141E18), blurRadius: 6, offset: const Offset(0, 2)),
+                                  boxShadow: const [
+                                    BoxShadow(color: Color(0x04141E18), blurRadius: 6, offset: Offset(0, 2)),
                                   ],
                                 ),
                                 child: Row(
@@ -1119,7 +1402,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                       child: Text(
                                         "Cd. ${tirada['cuadros_resumen']}",
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5, color: AgroTheme.colorAccentDark),
+                                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5, color: Color(0xFF2E7D32)),
                                       ),
                                     ),
                                     Expanded(
@@ -1150,7 +1433,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                       child: Text(
                                         "${litros.toStringAsFixed(0)} L",
                                         textAlign: TextAlign.right,
-                                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: AgroTheme.colorAccentDark),
+                                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Color(0xFF1E6B4C)),
                                       ),
                                     ),
                                   ],

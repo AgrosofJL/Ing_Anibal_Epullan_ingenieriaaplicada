@@ -1,21 +1,21 @@
 import 'dart:io';
-import 'package:excel/excel.dart' as xl;
+import 'package:excel/excel.dart' as xl hide Border;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
-import '../base/base.dart';import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
+import '../base/base.dart';
 import '../constantes/tema.dart';
 import '../widgets/soft_button.dart';
 
@@ -72,13 +72,12 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     return clean[0] + clean.substring(1).toLowerCase();
   }
 
-  // 💡 Semáforo de avance por cuartiles (cada 25%)
   Color _getColorSemaforo(double valor) {
     if (valor <= 0) return Colors.grey.shade400;
-    if (valor < 25) return const Color(0xFF60A5FA); // Azul inicio
-    if (valor < 50) return const Color(0xFF34D399); // Verde medio
-    if (valor < 75) return const Color(0xFFFBBF24); // Amarillo / Ámbar
-    return const Color(0xFFEF4444); // Rojo / Pleno estado
+    if (valor < 25) return const Color(0xFF60A5FA);
+    if (valor < 50) return const Color(0xFF34D399);
+    if (valor < 75) return const Color(0xFFFBBF24);
+    return const Color(0xFFEF4444);
   }
 
   IconData _getIconoCultivo(String cultivo) {
@@ -89,9 +88,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     return Icons.eco_rounded;
   }
 
-  // ==========================================================================
-  // CARGA Y AGRUPACIÓN DE LECTURAS POR VARIEDAD
-  // ==========================================================================
   Future<void> _cargarDatosDashboard() async {
     setState(() => _cargando = true);
     try {
@@ -140,7 +136,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
         (mapaGrupos[key]!['lecturas'] as List<Map<String, dynamic>>).add(l);
       }
 
-      // Cálculo de promedios para cada estado fenológico
       for (var key in mapaGrupos.keys) {
         final List<Map<String, dynamic>> listaLec =
             mapaGrupos[key]!['lecturas'] as List<Map<String, dynamic>>;
@@ -150,7 +145,8 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
           final String cod = (l['estado_codigo'] ?? '').toString();
           final String desc = (l['descripcion_estado'] ?? '').toString();
           final String label = cod.isNotEmpty ? "$cod - $desc" : desc;
-          final double valor = double.tryParse(l['valor_lectura']?.toString() ?? '0') ?? 0.0;
+          final double valor =
+              double.tryParse(l['valor_lectura']?.toString() ?? '0') ?? 0.0;
 
           if (!acum.containsKey(label)) {
             acum[label] = [];
@@ -175,342 +171,208 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     }
   }
 
-  // ==========================================================================
-  // 📊 REPORTE EN EXCEL: VARIEDAD ARRIBA + MATRIZ DE ESTADOS CON "DD/MM VALOR%"
-  // ==========================================================================
   Future<void> _exportarExcelCurvaFenologica() async {
-  if (_gruposVariedadMuestreadas.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('No hay registros fenológicos para exportar.')),
-    );
-    return;
-  }
+    if (_gruposVariedadMuestreadas.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay registros fenológicos para exportar.')),
+      );
+      return;
+    }
 
-  final excel = xl.Excel.createExcel();
-  final defaultSheet = excel.getDefaultSheet();
-  if (defaultSheet != null) excel.delete(defaultSheet);
+    final excel = xl.Excel.createExcel();
+    final defaultSheet = excel.getDefaultSheet();
+    if (defaultSheet != null) excel.delete(defaultSheet);
 
-  final int anio = DateTime.now().year;
+    final int anio = DateTime.now().year;
 
-  // Función para calcular la semana fenológica
-  int obtenerSemanaDelAnio(DateTime date) {
-    final comienzoAnio = DateTime(date.year, 1, 1);
-    final diferenciaDias = date.difference(comienzoAnio).inDays;
-    return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
-  }
+    int obtenerSemanaDelAnio(DateTime date) {
+      final comienzoAnio = DateTime(date.year, 1, 1);
+      final diferenciaDias = date.difference(comienzoAnio).inDays;
+      return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
+    }
 
-  // Acumulador general para la hoja de Datos Crudos
-  final List<List<xl.CellValue>> filasDatosCrudos = [];
+    final List<List<xl.CellValue>> filasDatosCrudos = [];
 
-  // ==========================================================================
-  // 1. GENERACIÓN DE HOJAS POR VARIEDAD (MATRIZ DINÁMICA)
-  // ==========================================================================
-  for (var g in _gruposVariedadMuestreadas) {
-    final String variedad = (g['variedad'] ?? 'Variedad').toString();
-    final String cultivo = (g['cultivo'] ?? 'Frutal').toString();
-    
-    String rawSheetName = "$cultivo-$variedad"
-        .replaceAll('/', '-')
-        .replaceAll('\\', '-')
-        .replaceAll('?', '')
-        .replaceAll('*', '')
-        .replaceAll(':', '');
-    if (rawSheetName.length > 30) rawSheetName = rawSheetName.substring(0, 30);
-    
-    final xl.Sheet sheet = excel[rawSheetName];
+    for (var g in _gruposVariedadMuestreadas) {
+      final String variedad = (g['variedad'] ?? 'Variedad').toString();
+      final String cultivo = (g['cultivo'] ?? 'Frutal').toString();
 
-    final List<Map<String, dynamic>> lecturas =
-        (g['lecturas'] as List).cast<Map<String, dynamic>>();
+      String rawSheetName = "$cultivo-$variedad"
+          .replaceAll('/', '-')
+          .replaceAll('\\', '-')
+          .replaceAll('?', '')
+          .replaceAll('*', '')
+          .replaceAll(':', '');
+      if (rawSheetName.length > 30) rawSheetName = rawSheetName.substring(0, 30);
 
-    final rawCuadros = g['cuadros'];
-    final String textoCuadros = rawCuadros is Iterable
-        ? rawCuadros.map((e) => e.toString()).join(', ')
-        : (rawCuadros?.toString() ?? 'S/D');
+      final xl.Sheet sheet = excel[rawSheetName];
+      final List<Map<String, dynamic>> lecturas =
+          (g['lecturas'] as List).cast<Map<String, dynamic>>();
 
-    // Estilos de celdas
-    final estiloTitulo = xl.CellStyle(
-      bold: true,
-      fontSize: 13,
-      fontColorHex: xl.ExcelColor.fromHexString("#134E32"),
-    );
+      final rawCuadros = g['cuadros'];
+      final String textoCuadros = rawCuadros is Iterable
+          ? rawCuadros.map((e) => e.toString()).join(', ')
+          : (rawCuadros?.toString() ?? 'S/D');
 
-    final estiloSubtitulo = xl.CellStyle(
-      bold: true,
-      fontSize: 10,
-      fontColorHex: xl.ExcelColor.fromHexString("#1E6B4C"),
-    );
-
-    final estiloHeaderTabla = xl.CellStyle(
-      bold: true,
-      fontSize: 10,
-      backgroundColorHex: xl.ExcelColor.fromHexString("#1E6B4C"),
-      fontColorHex: xl.ExcelColor.fromHexString("#FFFFFF"),
-      horizontalAlign: xl.HorizontalAlign.Center,
-      verticalAlign: xl.VerticalAlign.Center,
-    );
-
-    final estiloSemana = xl.CellStyle(
-      bold: true,
-      fontSize: 9,
-      backgroundColorHex: xl.ExcelColor.fromHexString("#E8F5E9"),
-      fontColorHex: xl.ExcelColor.fromHexString("#134E32"),
-      horizontalAlign: xl.HorizontalAlign.Center,
-    );
-
-    // --- ENCABEZADO INSTITUCIONAL ---
-    sheet.appendRow([xl.TextCellValue("AGROSOFT J&L · SISTEMA DE GESTIÓN FITOSANITARIA Y FENOLOGÍA")]);
-    sheet.row(0)[0]?.cellStyle = estiloTitulo;
-
-    sheet.appendRow([xl.TextCellValue("INFORME EJECUTIVO DE EVOLUCIÓN FENOLÓGICA Y CURVAS DE DESARROLLO")]);
-    sheet.row(1)[0]?.cellStyle = estiloSubtitulo;
-
-    sheet.appendRow([]); // Espacio
-
-    sheet.appendRow([
-      xl.TextCellValue("ESTABLECIMIENTO:"),
-      xl.TextCellValue(widget.nombreProductor.toUpperCase()),
-      xl.TextCellValue("TEMPORADA:"),
-      xl.IntCellValue(anio),
-      xl.TextCellValue("FECHA EMISIÓN:"),
-      xl.TextCellValue(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())),
-    ]);
-
-    sheet.appendRow([
-      xl.TextCellValue("ESPECIE / CULTIVO:"),
-      xl.TextCellValue(cultivo.toUpperCase()),
-      xl.TextCellValue("VARIEDAD BOTÁNICA:"),
-      xl.TextCellValue(variedad.toUpperCase()),
-      xl.TextCellValue("CUADROS AUDITADOS:"),
-      xl.TextCellValue(textoCuadros),
-    ]);
-
-    sheet.appendRow([]); // Espacio antes de la matriz
-
-    // --- RECOLECCIÓN DE FECHAS Y ESTADOS ---
-    final Set<String> fechasSet = {};
-    final Set<String> estadosSet = {};
-
-    for (var l in lecturas) {
-      final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
-      if (f.isNotEmpty) fechasSet.add(f);
-
-      final cod = (l['estado_codigo'] ?? '').toString().trim();
-      final desc = (l['descripcion_estado'] ?? '').toString().trim();
-      final label = cod.isNotEmpty ? "$cod - $desc" : desc;
-      if (label.isNotEmpty) estadosSet.add(label);
-
-      // Guardar también en la lista de datos crudos
-      DateTime? dtRaw = DateTime.tryParse(f);
-      filasDatosCrudos.add([
-        xl.TextCellValue((l['id_reg'] ?? l['id'] ?? '').toString()),
-        xl.TextCellValue(f),
-        xl.TextCellValue(dtRaw != null ? "Semana ${obtenerSemanaDelAnio(dtRaw)}" : "S/-"),
-        xl.TextCellValue(widget.nombreProductor),
-        xl.TextCellValue((l['chacra'] ?? 'Principal').toString()),
-        xl.TextCellValue((l['cuadro'] ?? '').toString()),
-        xl.TextCellValue((l['fila'] ?? '-').toString()),
-        xl.TextCellValue((l['planta_numero'] ?? '-').toString()),
-        xl.TextCellValue(cultivo),
-        xl.TextCellValue(variedad),
-        xl.TextCellValue(cod),
-        xl.TextCellValue(desc),
-        xl.DoubleCellValue(double.tryParse((l['valor_lectura'] ?? '0').toString()) ?? 0.0),
-        xl.TextCellValue((l['observaciones'] ?? l['obs'] ?? '').toString()),
-        xl.TextCellValue((l['url_evidencia'] ?? '').toString()),
+      sheet.appendRow([xl.TextCellValue("AGROSOFT J&L · SISTEMA DE GESTIÓN FITOSANITARIA Y FENOLOGÍA")]);
+      sheet.appendRow([xl.TextCellValue("INFORME DE EVOLUCIÓN FENOLÓGICA Y CURVAS DE DESARROLLO")]);
+      sheet.appendRow([]);
+      sheet.appendRow([
+        xl.TextCellValue("ESTABLECIMIENTO:"),
+        xl.TextCellValue(widget.nombreProductor.toUpperCase()),
+        xl.TextCellValue("TEMPORADA:"),
+        xl.IntCellValue(anio),
+        xl.TextCellValue("FECHA EMISIÓN:"),
+        xl.TextCellValue(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())),
       ]);
-    }
+      sheet.appendRow([
+        xl.TextCellValue("ESPECIE:"),
+        xl.TextCellValue(cultivo.toUpperCase()),
+        xl.TextCellValue("VARIEDAD:"),
+        xl.TextCellValue(variedad.toUpperCase()),
+        xl.TextCellValue("CUADROS:"),
+        xl.TextCellValue(textoCuadros),
+      ]);
+      sheet.appendRow([]);
 
-    final List<String> fechasOrdenadas = fechasSet.toList()..sort();
-    final List<String> estadosOrdenados = estadosSet.toList()..sort();
+      final Set<String> fechasSet = {};
+      final Set<String> estadosSet = {};
 
-    // Fila 1 de la matriz: Semanas del año
-    final List<xl.CellValue> filaSemanas = [xl.TextCellValue("SEMANA FENOLÓGICA")];
-    // Fila 2 de la matriz: Fechas DD/MM
-    final List<xl.CellValue> filaFechas = [xl.TextCellValue("ESTADO FENOLÓGICO / FECHA")];
+      for (var l in lecturas) {
+        final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
+        if (f.isNotEmpty) fechasSet.add(f);
 
-    for (var f in fechasOrdenadas) {
-      DateTime? dt = DateTime.tryParse(f);
-      if (dt != null) {
-        filaSemanas.add(xl.TextCellValue("SEM ${obtenerSemanaDelAnio(dt)}"));
-        filaFechas.add(xl.TextCellValue(DateFormat('dd/MM').format(dt)));
-      } else {
-        filaSemanas.add(xl.TextCellValue("SEM -"));
-        filaFechas.add(xl.TextCellValue(f));
+        final cod = (l['estado_codigo'] ?? '').toString().trim();
+        final desc = (l['descripcion_estado'] ?? '').toString().trim();
+        final label = cod.isNotEmpty ? "$cod - $desc" : desc;
+        if (label.isNotEmpty) estadosSet.add(label);
+
+        DateTime? dtRaw = DateTime.tryParse(f);
+        filasDatosCrudos.add([
+          xl.TextCellValue((l['id_reg'] ?? l['id'] ?? '').toString()),
+          xl.TextCellValue(f),
+          xl.TextCellValue(dtRaw != null ? "Semana ${obtenerSemanaDelAnio(dtRaw)}" : "S/-"),
+          xl.TextCellValue(widget.nombreProductor),
+          xl.TextCellValue((l['sector'] ?? l['chacra'] ?? 'Principal').toString()),
+          xl.TextCellValue((l['cuadro'] ?? '').toString()),
+          xl.TextCellValue((l['fila'] ?? '-').toString()),
+          xl.TextCellValue((l['planta_numero'] ?? '-').toString()),
+          xl.TextCellValue(cultivo),
+          xl.TextCellValue(variedad),
+          xl.TextCellValue(cod),
+          xl.TextCellValue(desc),
+          xl.DoubleCellValue(double.tryParse((l['valor_lectura'] ?? '0').toString()) ?? 0.0),
+          xl.TextCellValue((l['observaciones'] ?? '').toString()),
+          xl.TextCellValue((l['url_evidencia'] ?? '').toString()),
+        ]);
       }
-    }
 
-    sheet.appendRow(filaSemanas);
-    final int idxFilaSemana = sheet.maxRows - 1;
-    for (int col = 0; col < filaSemanas.length; col++) {
-      sheet.row(idxFilaSemana)[col]?.cellStyle = estiloSemana;
-    }
+      final List<String> fechasOrdenadas = fechasSet.toList()..sort();
+      final List<String> estadosOrdenados = estadosSet.toList()..sort();
 
-    sheet.appendRow(filaFechas);
-    final int idxFilaFecha = sheet.maxRows - 1;
-    for (int col = 0; col < filaFechas.length; col++) {
-      sheet.row(idxFilaFecha)[col]?.cellStyle = estiloHeaderTabla;
-    }
+      final List<xl.CellValue> filaSemanas = [xl.TextCellValue("SEMANA FENOLÓGICA")];
+      final List<xl.CellValue> filaFechas = [xl.TextCellValue("ESTADO / FECHA")];
 
-    // Mapa para calcular estado dominante por fecha
-    final Map<int, String> estadoDominantePorCol = {};
-    final Map<int, double> maxValorPorCol = {};
-
-    // --- LLENADO DE DATOS MATRICIALES ---
-    for (var estado in estadosOrdenados) {
-      final List<xl.CellValue> filaValores = [xl.TextCellValue(estado)];
-
-      for (int i = 0; i < fechasOrdenadas.length; i++) {
-        final fechaRaw = fechasOrdenadas[i];
-
-        final matches = lecturas.where((l) {
-          final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
-          final cod = (l['estado_codigo'] ?? '').toString().trim();
-          final desc = (l['descripcion_estado'] ?? '').toString().trim();
-          final label = cod.isNotEmpty ? "$cod - $desc" : desc;
-          return f == fechaRaw && label == estado;
-        });
-
-        if (matches.isNotEmpty) {
-          double suma = 0.0;
-          for (var m in matches) {
-            suma += double.tryParse(m['valor_lectura']?.toString() ?? '0') ?? 0.0;
-          }
-          final double prom = suma / matches.length;
-          filaValores.add(xl.TextCellValue("${prom.toStringAsFixed(0)}%"));
-
-          // Registrar si es el dominante en esta columna
-          if (prom > (maxValorPorCol[i] ?? -1.0)) {
-            maxValorPorCol[i] = prom;
-            estadoDominantePorCol[i] = estado.split(' - ').first;
-          }
+      for (var f in fechasOrdenadas) {
+        DateTime? dt = DateTime.tryParse(f);
+        if (dt != null) {
+          filaSemanas.add(xl.TextCellValue("SEM ${obtenerSemanaDelAnio(dt)}"));
+          filaFechas.add(xl.TextCellValue(DateFormat('dd/MM').format(dt)));
         } else {
-          filaValores.add(xl.TextCellValue("-"));
+          filaSemanas.add(xl.TextCellValue("SEM -"));
+          filaFechas.add(xl.TextCellValue(f));
         }
       }
 
-      sheet.appendRow(filaValores);
+      sheet.appendRow(filaSemanas);
+      sheet.appendRow(filaFechas);
+
+      for (var estado in estadosOrdenados) {
+        final List<xl.CellValue> filaValores = [xl.TextCellValue(estado)];
+
+        for (int i = 0; i < fechasOrdenadas.length; i++) {
+          final fechaRaw = fechasOrdenadas[i];
+          final matches = lecturas.where((l) {
+            final f = (l['fecha'] ?? l['created_at'] ?? '').toString().split('T').first;
+            final cod = (l['estado_codigo'] ?? '').toString().trim();
+            final desc = (l['descripcion_estado'] ?? '').toString().trim();
+            final label = cod.isNotEmpty ? "$cod - $desc" : desc;
+            return f == fechaRaw && label == estado;
+          });
+
+          if (matches.isNotEmpty) {
+            double suma = 0.0;
+            for (var m in matches) {
+              suma += double.tryParse(m['valor_lectura']?.toString() ?? '0') ?? 0.0;
+            }
+            final double prom = suma / matches.length;
+            filaValores.add(xl.TextCellValue("${prom.toStringAsFixed(0)}%"));
+          } else {
+            filaValores.add(xl.TextCellValue("-"));
+          }
+        }
+
+        sheet.appendRow(filaValores);
+      }
+
+      sheet.setColumnWidth(0, 36.0);
+      for (int col = 1; col <= fechasOrdenadas.length; col++) {
+        sheet.setColumnWidth(col, 14.0);
+      }
     }
 
-    // --- FILA DE CIERRE: ESTADO DOMINANTE ---
-    final List<xl.CellValue> filaDominante = [xl.TextCellValue("ESTADO DOMINANTE")];
-    for (int i = 0; i < fechasOrdenadas.length; i++) {
-      filaDominante.add(xl.TextCellValue(estadoDominantePorCol[i] ?? "-"));
-    }
-    sheet.appendRow(filaDominante);
-    final int idxFilaDom = sheet.maxRows - 1;
-    for (int col = 0; col < filaDominante.length; col++) {
-      sheet.row(idxFilaDom)[col]?.cellStyle = xl.CellStyle(
-        bold: true,
-        fontSize: 9,
-        backgroundColorHex: xl.ExcelColor.fromHexString("#FFF3E0"),
-        fontColorHex: xl.ExcelColor.fromHexString("#B78103"),
-        horizontalAlign: xl.HorizontalAlign.Center,
-      );
-    }
-
-    // Pie de página en la hoja
-    sheet.appendRow([]);
-    sheet.appendRow([
-      xl.TextCellValue("Powered by AgroSoft J&L · Chimpay, Río Negro · Sistema de Trazabilidad Agronómica")
+    final xl.Sheet sheetCrudos = excel['DATOS_CRUDOS'];
+    sheetCrudos.appendRow([
+      xl.TextCellValue("ID_REG"),
+      xl.TextCellValue("FECHA"),
+      xl.TextCellValue("SEMANA"),
+      xl.TextCellValue("PRODUCTOR"),
+      xl.TextCellValue("CHACRA"),
+      xl.TextCellValue("CUADRO"),
+      xl.TextCellValue("FILA"),
+      xl.TextCellValue("PLANTA"),
+      xl.TextCellValue("CULTIVO"),
+      xl.TextCellValue("VARIEDAD"),
+      xl.TextCellValue("COD_ESTADO"),
+      xl.TextCellValue("DESCRIPCION"),
+      xl.TextCellValue("VALOR_%"),
+      xl.TextCellValue("OBS"),
+      xl.TextCellValue("EVIDENCIA"),
     ]);
 
-    // Ancho automático para la columna de estados
-    sheet.setColumnWidth(0, 38.0);
-    for (int col = 1; col <= fechasOrdenadas.length; col++) {
-      sheet.setColumnWidth(col, 14.0);
+    for (var fila in filasDatosCrudos) {
+      sheetCrudos.appendRow(fila);
+    }
+
+    final List<int>? fileBytes = excel.save();
+    if (fileBytes == null) return;
+
+    final Uint8List bytes = Uint8List.fromList(fileBytes);
+    final String nombreArchivo =
+        'Curva_Fenologia_${widget.nombreProductor.replaceAll(' ', '_')}_$anio.xlsx';
+
+    if (kIsWeb) {
+      await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+    } else if (Platform.isWindows) {
+      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final filePath = "${dir.path}/$nombreArchivo";
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+      await OpenFilex.open(filePath);
+    } else {
+      await Share.shareXFiles(
+        [
+          XFile.fromData(
+            bytes,
+            name: nombreArchivo,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ),
+        ],
+        text: 'Evolución Fenológica - ${widget.nombreProductor}',
+      );
     }
   }
 
-  // ==========================================================================
-  // 2. GENERACIÓN DE HOJA MAESTRA: DATOS CRUDOS AUDITORÍA
-  // ==========================================================================
-  final xl.Sheet sheetCrudos = excel['DATOS_CRUDOS'];
-
-  final estiloHeaderCrudos = xl.CellStyle(
-    bold: true,
-    fontSize: 9,
-    backgroundColorHex: xl.ExcelColor.fromHexString("#263238"),
-    fontColorHex: xl.ExcelColor.fromHexString("#FFFFFF"),
-    horizontalAlign: xl.HorizontalAlign.Center,
-  );
-
-  final List<xl.CellValue> cabeceraCrudos = [
-    xl.TextCellValue("ID_REG"),
-    xl.TextCellValue("FECHA"),
-    xl.TextCellValue("SEMANA"),
-    xl.TextCellValue("PRODUCTOR"),
-    xl.TextCellValue("CHACRA"),
-    xl.TextCellValue("CUADRO"),
-    xl.TextCellValue("FILA"),
-    xl.TextCellValue("PLANTA"),
-    xl.TextCellValue("CULTIVO"),
-    xl.TextCellValue("VARIEDAD"),
-    xl.TextCellValue("COD_ESTADO"),
-    xl.TextCellValue("DESCRIPCION_ESTADO"),
-    xl.TextCellValue("VALOR_LECTURA_%"),
-    xl.TextCellValue("OBSERVACIONES"),
-    xl.TextCellValue("URL_EVIDENCIA"),
-  ];
-
-  sheetCrudos.appendRow(cabeceraCrudos);
-  for (int col = 0; col < cabeceraCrudos.length; col++) {
-    sheetCrudos.row(0)[col]?.cellStyle = estiloHeaderCrudos;
-  }
-
-  for (var fila in filasDatosCrudos) {
-    sheetCrudos.appendRow(fila);
-  }
-
-  // Autoajuste de anchos para la hoja de datos crudos
-  sheetCrudos.setColumnWidth(0, 10.0);
-  sheetCrudos.setColumnWidth(1, 13.0);
-  sheetCrudos.setColumnWidth(2, 14.0);
-  sheetCrudos.setColumnWidth(3, 24.0);
-  sheetCrudos.setColumnWidth(4, 16.0);
-  sheetCrudos.setColumnWidth(5, 12.0);
-  sheetCrudos.setColumnWidth(6, 10.0);
-  sheetCrudos.setColumnWidth(7, 10.0);
-  sheetCrudos.setColumnWidth(8, 14.0);
-  sheetCrudos.setColumnWidth(9, 18.0);
-  sheetCrudos.setColumnWidth(10, 14.0);
-  sheetCrudos.setColumnWidth(11, 28.0);
-  sheetCrudos.setColumnWidth(12, 18.0);
-  sheetCrudos.setColumnWidth(13, 30.0);
-  sheetCrudos.setColumnWidth(14, 40.0);
-
-  // ==========================================================================
-  // 3. EXPORTACIÓN SEGURO WEB Y MÓVIL (SIN USAR DART:IO FILE)
-  // ==========================================================================
-  final List<int>? fileBytes = excel.save();
-  if (fileBytes == null) return;
-
-  final Uint8List bytes = Uint8List.fromList(fileBytes);
-  final String nombreArchivo = 'Curva_Fenologia_${widget.nombreProductor.replaceAll(' ', '_')}_$anio.xlsx';
-
-  if (kIsWeb) {
-    // 💡 Safari / Chrome Web: Descarga directa en el navegador
-    await Printing.sharePdf(
-      bytes: bytes,
-      filename: nombreArchivo,
-    );
-  } else {
-    // Android / iOS Nativo
-    await Share.shareXFiles(
-      [
-        XFile.fromData(
-          bytes,
-          name: nombreArchivo,
-          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ),
-      ],
-      text: 'Planilla Oficial de Evolución Fenológica - ${widget.nombreProductor}',
-    );
-  }
-}
-
-  // ==========================================================================
-  // MODAL DETALLE DE MUESTREOS DE LA VARIEDAD
-  // ==========================================================================
   void _mostrarDetalleVariedad(Map<String, dynamic> grupo) {
     final String cultivo = grupo['cultivo'] ?? '';
     final String variedad = grupo['variedad'] ?? '';
@@ -600,7 +462,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
               ),
               const Divider(color: AgroTheme.colorBorder),
               const SizedBox(height: 8),
-
               Expanded(
                 child: ListView.separated(
                   itemCount: listaMuestreos.length,
@@ -661,8 +522,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
                             ],
                           ),
                           const SizedBox(height: 8),
-
-                          // Desglose de estados con badges semafóricos
                           Wrap(
                             spacing: 6,
                             runSpacing: 6,
@@ -714,9 +573,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     );
   }
 
-  // ==========================================================================
-  // MODAL DE REGISTRO NUEVO
-  // ==========================================================================
   void _abrirModalNuevoMuestreo() {
     if (_cuartelesInventarioParaCarga.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -767,15 +623,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
         ''', [cultivoCanonico, cultivoCanonico, cultivoCanonico]);
 
         List<Map<String, dynamic>> listaMutada = List<Map<String, dynamic>>.from(res);
-
-        if (listaMutada.isEmpty) {
-          final resGen = await db.rawQuery('''
-            SELECT * FROM fenologia_parametros
-            WHERE cultivo IS NULL OR TRIM(cultivo) = ''
-            ORDER BY estado_codigo ASC
-          ''');
-          listaMutada = List<Map<String, dynamic>>.from(resGen);
-        }
 
         if (listaMutada.isEmpty) {
           final resAll = await db.query('fenologia_parametros', orderBy: 'estado_codigo ASC');
@@ -1206,384 +1053,284 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
     );
   }
 
- Future<void> _exportarPdfIndividualVariedad(
-    Map<String, dynamic> grupo, List<List<Map<String, dynamic>>> muestreos) async {
-  final pdf = pw.Document();
-  final String anio = DateTime.now().year.toString();
+  Future<void> _exportarPdfIndividualVariedad(
+      Map<String, dynamic> grupo, List<List<Map<String, dynamic>>> muestreos) async {
+    final pdf = pw.Document();
+    final String anio = DateTime.now().year.toString();
 
-  // 1. Carga segura del logo (nunca detiene la ejecución si da 404 en Web)
-  pw.MemoryImage? logoImage;
-  try {
-    final ByteData bytes = await rootBundle.load('logo/logo_anibal.png');
-    logoImage = pw.MemoryImage(bytes.buffer.asUint8List());
-  } catch (_) {
+    pw.MemoryImage? logoImage;
     try {
-      final ByteData bytesFallback = await rootBundle.load('logo/logo.png');
-      logoImage = pw.MemoryImage(bytesFallback.buffer.asUint8List());
+      final ByteData bytes = await rootBundle.load('logo/logo_anibal.png');
+      logoImage = pw.MemoryImage(bytes.buffer.asUint8List());
     } catch (_) {
-      logoImage = null;
+      try {
+        final ByteData bytesFallback = await rootBundle.load('logo/logo.png');
+        logoImage = pw.MemoryImage(bytesFallback.buffer.asUint8List());
+      } catch (_) {
+        logoImage = null;
+      }
     }
-  }
 
-  // 2. Sanitización de cuadros
-  final rawCuadros = grupo['cuadros'];
-  final String textoCuadros = rawCuadros is Iterable
-      ? rawCuadros.map((e) => e.toString()).join(', ')
-      : (rawCuadros?.toString() ?? 'S/D');
+    final rawCuadros = grupo['cuadros'];
+    final String textoCuadros = rawCuadros is Iterable
+        ? rawCuadros.map((e) => e.toString()).join(', ')
+        : (rawCuadros?.toString() ?? 'S/D');
 
-  // Colores corporativos AgroSoft
-  const colorVerdeOscuro = PdfColor.fromInt(0xFF134E32);
-  const colorVerdeSecundario = PdfColor.fromInt(0xFF1E6B4C);
-  const colorFondoGris = PdfColor.fromInt(0xFFF9FAFB);
-  const colorBorde = PdfColor.fromInt(0xFFE5E7EB);
+    const colorVerdeOscuro = PdfColor.fromInt(0xFF134E32);
+    const colorVerdeSecundario = PdfColor.fromInt(0xFF1E6B4C);
+    const colorFondoGris = PdfColor.fromInt(0xFFF9FAFB);
+    const colorBorde = PdfColor.fromInt(0xFFE5E7EB);
 
-  // Función interna para calcular la semana del año
-  int obtenerSemanaDelAnio(DateTime date) {
-    final comienzoAnio = DateTime(date.year, 1, 1);
-    final diferenciaDias = date.difference(comienzoAnio).inDays;
-    return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
-  }
+    int obtenerSemanaDelAnio(DateTime date) {
+      final comienzoAnio = DateTime(date.year, 1, 1);
+      final diferenciaDias = date.difference(comienzoAnio).inDays;
+      return ((diferenciaDias + comienzoAnio.weekday) / 7).ceil();
+    }
 
-  pdf.addPage(
-    pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      margin: const pw.EdgeInsets.all(30),
-      header: (pw.Context context) {
-        return pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.Row(
-              crossAxisAlignment: pw.CrossAxisAlignment.center,
-              children: [
-                // 💡 LOGO EN LA ESQUINA SUPERIOR IZQUIERDA
-                if (logoImage != null) ...[
-                  pw.Container(
-                    width: 46,
-                    height: 46,
-                    child: pw.Image(logoImage),
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(30),
+        header: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  if (logoImage != null) ...[
+                    pw.Container(
+                      width: 46,
+                      height: 46,
+                      child: pw.Image(logoImage),
+                    ),
+                    pw.SizedBox(width: 14),
+                  ],
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text(
+                          "INGENIERÍA APLICADA · MONITOREO AGRONÓMICO",
+                          style: pw.TextStyle(
+                            fontSize: 8.5,
+                            fontWeight: pw.FontWeight.bold,
+                            color: colorVerdeSecundario,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        pw.SizedBox(height: 2),
+                        pw.Text(
+                          "REPORTE OFICIAL DE ESTADOS FENOLÓGICOS",
+                          style: pw.TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: pw.FontWeight.bold,
+                            color: colorVerdeOscuro,
+                          ),
+                        ),
+                        pw.Text(
+                          "Establecimiento: ${widget.nombreProductor.toUpperCase()}",
+                          style: pw.TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: pw.FontWeight.bold,
+                            color: PdfColors.grey800,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  pw.SizedBox(width: 14),
-                ],
-                pw.Expanded(
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
                     children: [
-                      pw.Text(
-                        "INGENIERÍA APLICADA · MONITOREO AGRONÓMICO",
-                        style: pw.TextStyle(
-                          fontSize: 8.5,
-                          fontWeight: pw.FontWeight.bold,
-                          color: colorVerdeSecundario,
-                          letterSpacing: 0.5,
+                      pw.Container(
+                        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: pw.BoxDecoration(
+                          color: colorFondoGris,
+                          borderRadius: pw.BorderRadius.circular(4),
+                          border: pw.Border.all(color: colorBorde, width: 0.8),
+                        ),
+                        child: pw.Text(
+                          "TEMPORADA $anio",
+                          style: pw.TextStyle(
+                            fontSize: 9,
+                            fontWeight: pw.FontWeight.bold,
+                            color: colorVerdeOscuro,
+                          ),
                         ),
                       ),
-                      pw.SizedBox(height: 2),
+                      pw.SizedBox(height: 4),
                       pw.Text(
-                        "REPORTE OFICIAL DE ESTADOS FENOLÓGICOS",
-                        style: pw.TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: pw.FontWeight.bold,
-                          color: colorVerdeOscuro,
-                        ),
-                      ),
-                      pw.Text(
-                        "Establecimiento: ${widget.nombreProductor.toUpperCase()}",
-                        style: pw.TextStyle(
-                          fontSize: 9.5,
-                          fontWeight: pw.FontWeight.bold,
-                          color: PdfColors.grey800,
-                        ),
+                        "Emisión: ${DateTime.now().day.toString().padLeft(2, '0')}/${DateTime.now().month.toString().padLeft(2, '0')}/${DateTime.now().year}",
+                        style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
                       ),
                     ],
                   ),
+                ],
+              ),
+              pw.SizedBox(height: 6),
+              pw.Divider(thickness: 1.2, color: colorVerdeSecundario),
+              pw.SizedBox(height: 10),
+            ],
+          );
+        },
+        footer: (pw.Context context) {
+          return pw.Column(
+            children: [
+              pw.Divider(thickness: 0.7, color: colorBorde),
+              pw.SizedBox(height: 4),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Row(
+                    children: [
+                      pw.Text(
+                        "AgroSoft J&L",
+                        style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro),
+                      ),
+                      pw.Text(
+                        " · Sistema Integral de Gestión Agrícola & Trazabilidad Fitosanitaria",
+                        style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
+                      ),
+                    ],
+                  ),
+                  pw.Text(
+                    "Página ${context.pageNumber} de ${context.pagesCount}",
+                    style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+        build: (pw.Context context) => [
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: pw.BoxDecoration(
+              color: colorFondoGris,
+              borderRadius: pw.BorderRadius.circular(6),
+              border: pw.Border.all(color: colorBorde, width: 0.8),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text("ESPECIE / CULTIVO", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                    pw.Text("${grupo['cultivo'] ?? 'FRUTALES'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text("VARIEDAD BOTÁNICA", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                    pw.Text("${grupo['variedad'] ?? 'S/D'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro)),
+                  ],
+                ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text("CUADROS AUDITADOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                    pw.Text(textoCuadros, style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
+                  ],
                 ),
                 pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.end,
                   children: [
-                    pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: pw.BoxDecoration(
-                        color: colorFondoGris,
-                        borderRadius: pw.BorderRadius.circular(4),
-                        border: pw.Border.all(color: colorBorde, width: 0.8),
-                      ),
-                      child: pw.Text(
-                        "TEMPORADA $anio",
-                        style: pw.TextStyle(
-                          fontSize: 9,
-                          fontWeight: pw.FontWeight.bold,
-                          color: colorVerdeOscuro,
-                        ),
-                      ),
-                    ),
-                    pw.SizedBox(height: 4),
-                    pw.Text(
-                      "Emisión: ${DateTime.now().day.toString().padLeft(2, '0')}/${DateTime.now().month.toString().padLeft(2, '0')}/${DateTime.now().year}",
-                      style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
-                    ),
+                    pw.Text("TOTAL MUESTREOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
+                    pw.Text("${muestreos.length} estaciones", style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
                   ],
                 ),
               ],
             ),
-            pw.SizedBox(height: 6),
-            pw.Divider(thickness: 1.2, color: colorVerdeSecundario),
-            pw.SizedBox(height: 10),
-          ],
-        );
-      },
-      footer: (pw.Context context) {
-        // 💡 PIE DE PÁGINA CORPORATIVO AGROSOFT J&L
-        return pw.Column(
-          children: [
-            pw.Divider(thickness: 0.7, color: colorBorde),
-            pw.SizedBox(height: 4),
-            pw.Row(
-              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-              children: [
-                pw.Row(
-                  children: [
-                    pw.Text(
-                      "AgroSoft J&L",
-                      style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro),
-                    ),
-                    pw.Text(
-                      " · Sistema Integral de Gestión Agrícola & Trazabilidad Fitosanitaria",
-                      style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
-                    ),
-                  ],
-                ),
-                pw.Text(
-                  "Página ${context.pageNumber} de ${context.pagesCount}",
-                  style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey700),
-                ),
-              ],
-            ),
-            pw.SizedBox(height: 2),
-            pw.Align(
-              alignment: pw.Alignment.centerLeft,
-              child: pw.Text(
-                "Documento técnico agronómico válido para auditorías de inocuidad y control de evolución fenológica.",
-                style: const pw.TextStyle(fontSize: 6.5, color: PdfColors.grey500),
-              ),
-            ),
-          ],
-        );
-      },
-      build: (pw.Context context) => [
-        // Ficha resumida del cuartel/variedad
-        pw.Container(
-          padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: pw.BoxDecoration(
-            color: colorFondoGris,
-            borderRadius: pw.BorderRadius.circular(6),
-            border: pw.Border.all(color: colorBorde, width: 0.8),
           ),
-          child: pw.Row(
-            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-            children: [
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text("ESPECIE / CULTIVO", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-                  pw.Text("${grupo['cultivo'] ?? 'FRUTALES'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-                ],
-              ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text("VARIEDAD BOTÁNICA", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-                  pw.Text("${grupo['variedad'] ?? 'S/D'}", style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro)),
-                ],
-              ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text("CUADROS AUDITADOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-                  pw.Text(textoCuadros, style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
-                ],
-              ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
-                children: [
-                  pw.Text("TOTAL MUESTREOS", style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600)),
-                  pw.Text("${muestreos.length} estaciones", style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold)),
-                ],
-              ),
+          pw.SizedBox(height: 14),
+
+          pw.TableHelper.fromTextArray(
+            border: pw.TableBorder.all(color: colorBorde, width: 0.6),
+            headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+            headerDecoration: const pw.BoxDecoration(color: colorVerdeSecundario),
+            headerHeight: 22,
+            cellHeight: 20,
+            cellStyle: const pw.TextStyle(fontSize: 7.5),
+            headers: const [
+              'FECHA',
+              'SEM.',
+              'CUADRO',
+              'ESTACIÓN / PLANTA',
+              'ESTADO DOMINANTE',
+              'DISTRIBUCIÓN DE ESTADOS (%)',
             ],
-          ),
-        ),
-        pw.SizedBox(height: 14),
+            columnWidths: const {
+              0: pw.FixedColumnWidth(55),
+              1: pw.FixedColumnWidth(30),
+              2: pw.FixedColumnWidth(48),
+              3: pw.FixedColumnWidth(75),
+              4: pw.FixedColumnWidth(95),
+              5: pw.FlexColumnWidth(2),
+            },
+            data: muestreos.map((m) {
+              if (m.isEmpty) return ['', '', '', '', '', ''];
+              final cab = m.first;
 
-        pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-          children: [
-            pw.Text(
-              "HISTORIAL CRONOLÓGICO Y DINÁMICA DE ESTADOS (%)",
-              style: pw.TextStyle(
-                fontSize: 9.5,
-                fontWeight: pw.FontWeight.bold,
-                color: colorVerdeOscuro,
-                letterSpacing: 0.3,
-              ),
-            ),
-            pw.Text(
-              "* Valores expresados en proporción porcentual de yemas/flores/frutos observados",
-              style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey600),
-            ),
-          ],
-        ),
-        pw.SizedBox(height: 6),
+              final rawFecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString();
+              final DateTime? dt = DateTime.tryParse(rawFecha);
+              final String fechaStr = dt != null
+                  ? "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}"
+                  : rawFecha.split('T').first;
+              final String semStr = dt != null ? "S.${obtenerSemanaDelAnio(dt)}" : "S/-";
 
-        // 💡 TABLA TÉCNICA CON FECHA, SEMANA Y PORCENTAJES DESGLOSADOS
-        pw.TableHelper.fromTextArray(
-          border: pw.TableBorder.all(color: colorBorde, width: 0.6),
-          headerStyle: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: colorVerdeSecundario),
-          headerHeight: 22,
-          cellHeight: 20,
-          cellStyle: const pw.TextStyle(fontSize: 7.5),
-          cellAlignment: pw.Alignment.centerLeft,
-          headers: const [
-            'FECHA',
-            'SEM.',
-            'CUADRO',
-            'ESTACIÓN / PLANTA',
-            'ESTADO DOMINANTE',
-            'DISTRIBUCIÓN DE ESTADOS (%)',
-          ],
-          columnWidths: const {
-            0: pw.FixedColumnWidth(55),
-            1: pw.FixedColumnWidth(30),
-            2: pw.FixedColumnWidth(48),
-            3: pw.FixedColumnWidth(75),
-            4: pw.FixedColumnWidth(95),
-            5: pw.FlexColumnWidth(2),
-          },
-          data: muestreos.map((m) {
-            if (m.isEmpty) return ['', '', '', '', '', ''];
-            final cab = m.first;
-
-            // Formateo de fecha y semana
-            final rawFecha = (cab['fecha'] ?? cab['created_at'] ?? '').toString();
-            final DateTime? dt = DateTime.tryParse(rawFecha);
-            final String fechaStr = dt != null
-                ? "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}"
-                : rawFecha.split('T').first;
-            final String semStr = dt != null ? "S.${obtenerSemanaDelAnio(dt)}" : "S/-";
-
-            // Localizar el estado dominante (mayor porcentaje)
-            Map<String, dynamic>? dominante;
-            double maxPorcentaje = -1.0;
-            for (var sub in m) {
-              final val = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
-              if (val > maxPorcentaje) {
-                maxPorcentaje = val;
-                dominante = sub;
+              Map<String, dynamic>? dominante;
+              double maxPorcentaje = -1.0;
+              for (var sub in m) {
+                final val = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
+                if (val > maxPorcentaje) {
+                  maxPorcentaje = val;
+                  dominante = sub;
+                }
               }
-            }
 
-            final String estadoDomTxt = dominante != null
-                ? "${dominante['estado_codigo']} (${maxPorcentaje.toInt()}%)"
-                : "S/D";
+              final String estadoDomTxt = dominante != null
+                  ? "${dominante['estado_codigo']} (${maxPorcentaje.toInt()}%)"
+                  : "S/D";
 
-            // Detalle concatenado con porcentajes
-            final String desgloseTotal = m.map((sub) {
-              final double p = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
-              return "${sub['estado_codigo']} : ${p.toStringAsFixed(0)}%";
-            }).join("  |  ");
+              final String desgloseTotal = m.map((sub) {
+                final double p = double.tryParse((sub['valor_lectura'] ?? '0').toString()) ?? 0.0;
+                return "${sub['estado_codigo']} : ${p.toStringAsFixed(0)}%";
+              }).join("  |  ");
 
-            return [
-              fechaStr,
-              semStr,
-              "Cuadro ${cab['cuadro'] ?? '-'}",
-              "Fila ${cab['fila'] ?? '-'} · Pl. ${cab['planta_numero'] ?? '-'}",
-              estadoDomTxt,
-              desgloseTotal,
-            ];
-          }).toList(),
-        ),
-
-        pw.SizedBox(height: 16),
-        // Cuadro de notas / observaciones de campo
-        pw.Container(
-          padding: const pw.EdgeInsets.all(8),
-          decoration: pw.BoxDecoration(
-            color: colorFondoGris,
-            borderRadius: pw.BorderRadius.circular(6),
-            border: pw.Border.all(color: colorBorde, width: 0.8),
+              return [
+                fechaStr,
+                semStr,
+                "Cuadro ${cab['cuadro'] ?? '-'}",
+                "Fila ${cab['fila'] ?? '-'} · Pl. ${cab['planta_numero'] ?? '-'}",
+                estadoDomTxt,
+                desgloseTotal,
+              ];
+            }).toList(),
           ),
-          child: pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              pw.Text(
-                "CRITERIO TÉCNICO DE EVOLUCIÓN:",
-                style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: colorVerdeOscuro),
-              ),
-              pw.SizedBox(height: 2),
-              pw.Text(
-                "El seguimiento fenológico semanal permite sincronizar las aplicaciones de inductores de cuaja, raleo químico y monitoreo de carpocapsa/grafolita en función de la susceptibilidad tisular del cultivo.",
-                style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-
-  // Compartir PDF según plataforma (Web o Móvil)
-  await _compartirArchivoPdf(pdf, "Fenologia_${grupo['variedad'] ?? 'Variedad'}_$anio.pdf");
-}
-
-  pw.Widget _buildCabeceraPdf(String subtitulo) {
-    return pw.Column(
-
-      children: [
-        pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-          children: [
-            pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text("Ingeniero Agronomo Anibal Epullan - Ingenieria Aplicada al Agro.",
-                    style: pw.TextStyle(
-                        fontSize: 16, fontWeight: pw.FontWeight.bold, color: const PdfColor.fromInt(0xFF123F2C))),
-                pw.Text("SISTEMA DE GESTIÓN FITOSANITARIA Y FENOLOGÍA",
-                    style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700)),
-              ],
-            ),
-            pw.Text(widget.nombreProductor, style: pw.TextStyle(fontSize: 10.5, fontWeight: pw.FontWeight.bold)),
-          ],
-        ),
-        pw.SizedBox(height: 4),
-        pw.Divider(thickness: 1, color: const PdfColor.fromInt(0xFF1E6B4C)),
-        pw.SizedBox(height: 4),
-        pw.Text(subtitulo, style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey800)),
-      ],
+        ],
+      ),
     );
+
+    final Uint8List bytes = await pdf.save();
+    final String nombreArchivo = "Fenologia_${grupo['variedad'] ?? 'Variedad'}_$anio.pdf";
+
+    if (kIsWeb) {
+      await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+    } else if (Platform.isWindows) {
+      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+      final filePath = "${dir.path}/$nombreArchivo";
+      final file = File(filePath);
+      await file.writeAsBytes(bytes);
+      await OpenFilex.open(filePath);
+    } else {
+      await Share.shareXFiles(
+        [XFile.fromData(bytes, name: nombreArchivo, mimeType: 'application/pdf')],
+        text: 'Reporte Oficial de Fenología - ${widget.nombreProductor}',
+      );
+    }
   }
-
-  Future<void> _compartirArchivoPdf(pw.Document pdf, String nombreArchivo) async {
-  final Uint8List bytes = await pdf.save();
-
-  if (kIsWeb) {
-    await Printing.sharePdf(
-      bytes: bytes,
-      filename: nombreArchivo,
-    );
-  } else {
-    await Share.shareXFiles(
-      [
-        XFile.fromData(
-          bytes,
-          name: nombreArchivo,
-          mimeType: 'application/pdf',
-        ),
-      ],
-      text: 'Reporte Oficial de Fenología - ${widget.nombreProductor}',
-    );
-  }
-}
 
   void _verFoto(String url) {
     showDialog(
@@ -1623,7 +1370,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
           ],
         ),
         actions: [
-          // 💡 Botón Excel de Curva y Botón PDF
           IconButton(
             icon: const Icon(Icons.table_view_rounded, color: Color(0xFF1E6B4C)),
             tooltip: "Exportar Excel Curva Fenológica",
@@ -1634,7 +1380,7 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
       ),
       body: SafeArea(
         child: _cargando
-            ? const Center(child: CircularProgressIndicator(color: AgroTheme.colorAccent))
+            ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
             : _gruposVariedadMuestreadas.isEmpty
                 ? const Center(
                     child: Text("No hay registros fenológicos en la temporada actual.",
@@ -1683,12 +1429,12 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                     decoration: BoxDecoration(
-                                      color: AgroTheme.colorAccentSoft,
+                                      color: const Color(0xFFE8F5E9),
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Text(
                                       "$totalReg muestreos",
-                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AgroTheme.colorAccentDark),
+                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF2E7D32)),
                                     ),
                                   ),
                                 ],
@@ -1700,7 +1446,6 @@ class _FenologiaScreenState extends State<FenologiaScreen> {
                               ),
                               const SizedBox(height: 12),
 
-                              // Semáforos y porcentajes de estados promedios
                               if (promedios.isNotEmpty)
                                 Wrap(
                                   spacing: 6,

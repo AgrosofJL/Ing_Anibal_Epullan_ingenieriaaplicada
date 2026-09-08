@@ -1,5 +1,13 @@
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:excel/excel.dart' hide Border;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:printing/printing.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -108,7 +116,7 @@ class _InventarioPlantacionScreenState
 
     final db = await DatabaseHelper.instance.database;
 
-    if (_esIngenieroOAdminGlobal) {
+    if (_esIngenieroOAdmin) {
       final prods = await db.query(
         'productores',
         where: 'estado = ?',
@@ -137,14 +145,11 @@ class _InventarioPlantacionScreenState
     await _cargarDatosCompletos();
   }
 
-  // 💡 ESTO LO MODIFIQUE: Detección flexible de roles (ADMIN, ADM, PROD-ADM, PROD-ADMIN)
-  bool get _esIngenieroOAdminGlobal =>
+  bool get _esIngenieroOAdmin =>
       _userRole == 'INGENIERO' || _userRole == 'ADMIN' || _userRole == 'ADM';
 
   bool get _puedeEditar =>
-      _esIngenieroOAdminGlobal ||
-      _userRole.contains('ADM') ||
-      _userRole.contains('ADMIN');
+      _esIngenieroOAdmin || _userRole == 'PROD-ADMIN';
 
   Future<void> _cargarDatosCompletos() async {
     if (_selectedCodProductor == null) return;
@@ -234,6 +239,113 @@ class _InventarioPlantacionScreenState
     return _plantasTotales / sup;
   }
 
+  Future<void> _exportarExcelInventario() async {
+    try {
+      final excel = Excel.createExcel();
+      final sheet = excel['Catastro_Plantacion'];
+      excel.delete('Sheet1');
+
+      final headerStyle = CellStyle(
+        bold: true,
+        fontColorHex: ExcelColor.white,
+        backgroundColorHex: ExcelColor.fromHexString('#1E6B4C'),
+        horizontalAlign: HorizontalAlign.Center,
+      );
+
+      final headers = [
+        'ID',
+        'Chacra',
+        'Cuadro',
+        'Especie / Cultivo',
+        'Variedad',
+        'Superficie (Ha)',
+        'Año Plantación',
+        'Cantidad Plantas',
+        'Entre Filas (m)',
+        'Entre Plantas (m)',
+        'Marco (m²)',
+        'Sistema Riego',
+        'Defensa',
+        'Orientación',
+        'UP'
+      ];
+
+      for (int i = 0; i < headers.length; i++) {
+        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        cell.value = TextCellValue(headers[i]);
+        cell.cellStyle = headerStyle;
+      }
+
+      int rowIdx = 1;
+      for (var row in _inventarioFiltrado) {
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value =
+            TextCellValue(row['id']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value =
+            TextCellValue(row['chacra']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value =
+            TextCellValue(row['cuadro']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value =
+            TextCellValue(row['cultivo']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value =
+            TextCellValue(row['variedad']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value =
+            DoubleCellValue(double.tryParse(row['ha']?.toString() ?? '0') ?? 0.0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value =
+            IntCellValue(int.tryParse(row['ano_plantacion']?.toString() ?? '0') ?? 0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx)).value =
+            IntCellValue(int.tryParse(row['plantas']?.toString() ?? '0') ?? 0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value =
+            DoubleCellValue(double.tryParse(row['dist_fila']?.toString() ?? '0') ?? 0.0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx)).value =
+            DoubleCellValue(double.tryParse(row['dist_arbol']?.toString() ?? '0') ?? 0.0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIdx)).value =
+            DoubleCellValue(double.tryParse(row['marco_plantacion']?.toString() ?? '0') ?? 0.0);
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx)).value =
+            TextCellValue(row['sitema_riego']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx)).value =
+            TextCellValue(row['sistema_def']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 13, rowIndex: rowIdx)).value =
+            TextCellValue(row['orientacion']?.toString() ?? '');
+        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 14, rowIndex: rowIdx)).value =
+            TextCellValue(row['up']?.toString() ?? '');
+        rowIdx++;
+      }
+
+      final fileBytes = excel.save();
+      if (fileBytes == null) return;
+
+      final Uint8List bytes = Uint8List.fromList(fileBytes);
+      final String nombreArchivo =
+          'Inventario_${_selectedNombreProductor.replaceAll(' ', '_')}.xlsx';
+
+      if (kIsWeb) {
+        await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
+      } else if (Platform.isWindows) {
+        final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        final filePath = "${dir.path}/$nombreArchivo";
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+        await OpenFilex.open(filePath);
+      } else {
+        await Share.shareXFiles(
+          [
+            XFile.fromData(
+              bytes,
+              name: nombreArchivo,
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ),
+          ],
+          text: 'Catastro de Plantación - $_selectedNombreProductor',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: const Color(0xFFC62828), content: Text("Error al exportar: $e")),
+      );
+    }
+  }
+
   Future<void> _sincronizarRemoto(String tabla, Map<String, dynamic> data) async {
     try {
       final supabase = Supabase.instance.client;
@@ -268,7 +380,7 @@ class _InventarioPlantacionScreenState
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-        borderSide: const BorderSide(color: AgroTheme.colorAccentDark, width: 1.5),
+        borderSide: const BorderSide(color: Color(0xFF1E6B4C), width: 1.5),
       ),
     );
   }
@@ -607,7 +719,7 @@ class _InventarioPlantacionScreenState
                               "Chacra: ${cuadroActual['chacra']} · Cuadro: ${cuadroActual['cuadro']}",
                               style: const TextStyle(
                                 fontSize: 12,
-                                color: AgroTheme.colorAccentDark,
+                                color: Color(0xFF1E6B4C),
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -627,19 +739,10 @@ class _InventarioPlantacionScreenState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              "1. Seleccionar Cuadro Asignado:",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12.5,
-                                color: AgroTheme.colorTextSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
                             DropdownButtonFormField<int>(
                               value: codCuadroSeleccionado,
                               decoration: _inputDecoration(
-                                "Cuadro",
+                                "Cuadro Asignado",
                                 Icons.grid_view_rounded,
                               ),
                               items: _cuadros.map((c) {
@@ -657,30 +760,20 @@ class _InventarioPlantacionScreenState
                                     cuadroActual = _cuadros.firstWhere(
                                       (c) => c['cod_cuadro'] == v,
                                     );
-                                    haCtrl.text =
-                                        "${cuadroActual['sup'] ?? ''}";
+                                    haCtrl.text = "${cuadroActual['sup'] ?? ''}";
                                     calcularPlantasAuto();
                                   });
                                 }
                               },
                             ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              "2. Cultivo y Variedad Botánica:",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12.5,
-                                color: AgroTheme.colorTextSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 12),
                             Row(
                               children: [
                                 Expanded(
                                   child: DropdownButtonFormField<String>(
                                     value: cultivoSeleccionado,
                                     decoration: _inputDecoration(
-                                      "Cultivo / Especie",
+                                      "Cultivo",
                                       Icons.eco_outlined,
                                     ),
                                     items: _cultivosVariedades.keys.map((cul) {
@@ -693,10 +786,8 @@ class _InventarioPlantacionScreenState
                                       if (v != null) {
                                         setModalState(() {
                                           cultivoSeleccionado = v;
-                                          listaVariedades =
-                                              _cultivosVariedades[v] ?? [];
-                                          variedadSeleccionada =
-                                              listaVariedades.first;
+                                          listaVariedades = _cultivosVariedades[v] ?? [];
+                                          variedadSeleccionada = listaVariedades.first;
                                         });
                                       }
                                     },
@@ -708,7 +799,7 @@ class _InventarioPlantacionScreenState
                                     value: variedadSeleccionada,
                                     decoration: _inputDecoration(
                                       "Variedad",
-                                      Icons.psychology_outlined,
+                                      Icons.nature_rounded,
                                     ),
                                     items: listaVariedades.map((vari) {
                                       return DropdownMenuItem<String>(
@@ -727,29 +818,14 @@ class _InventarioPlantacionScreenState
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              "3. Marco de Plantación y Superficie:",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12.5,
-                                color: AgroTheme.colorTextSecondary,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
+                            const SizedBox(height: 12),
                             Row(
                               children: [
                                 Expanded(
                                   child: TextFormField(
                                     controller: distFilaCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                    decoration: _inputDecoration(
-                                      "Entre Filas (m)",
-                                      Icons.straighten_rounded,
-                                    ),
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: _inputDecoration("Entre Filas (m)", Icons.straighten_rounded),
                                     onChanged: (_) => calcularPlantasAuto(),
                                   ),
                                 ),
@@ -757,37 +833,22 @@ class _InventarioPlantacionScreenState
                                 Expanded(
                                   child: TextFormField(
                                     controller: distArbolCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                    decoration: _inputDecoration(
-                                      "Entre Plantas (m)",
-                                      Icons.height_rounded,
-                                    ),
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: _inputDecoration("Entre Plantas (m)", Icons.height_rounded),
                                     onChanged: (_) => calcularPlantasAuto(),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             Row(
                               children: [
                                 Expanded(
                                   child: TextFormField(
                                     controller: haCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                    decoration: _inputDecoration(
-                                      "Superficie Cuartel (Ha)",
-                                      Icons.aspect_ratio_rounded,
-                                    ),
-                                    validator: (v) =>
-                                        v == null || v.trim().isEmpty
-                                            ? "Obligatorio"
-                                            : null,
+                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    decoration: _inputDecoration("Superficie (Ha)", Icons.aspect_ratio_rounded),
+                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
                                     onChanged: (_) => calcularPlantasAuto(),
                                   ),
                                 ),
@@ -796,72 +857,42 @@ class _InventarioPlantacionScreenState
                                   child: TextFormField(
                                     controller: plantasCtrl,
                                     keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration(
-                                      "Plantas Totales",
-                                      Icons.forest_outlined,
-                                    ),
-                                    validator: (v) =>
-                                        v == null || v.trim().isEmpty
-                                            ? "Obligatorio"
-                                            : null,
+                                    decoration: _inputDecoration("Total Plantas", Icons.forest_outlined),
+                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             Row(
                               children: [
                                 Expanded(
                                   child: TextFormField(
                                     controller: anoCtrl,
                                     keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration(
-                                      "Año Plantación",
-                                      Icons.event_note_rounded,
-                                    ),
-                                    validator: (v) =>
-                                        v == null || v.trim().isEmpty
-                                            ? "Obligatorio"
-                                            : null,
+                                    decoration: _inputDecoration("Año Plantación", Icons.event_note_rounded),
+                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextFormField(
                                     controller: upCtrl,
-                                    decoration: _inputDecoration(
-                                      "Unidad Productora (UP)",
-                                      Icons.badge_outlined,
-                                    ),
+                                    decoration: _inputDecoration("UP (Unidad Prod)", Icons.badge_outlined),
                                   ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             DropdownButtonFormField<String>(
                               value: orientacionSeleccionada,
-                              decoration: _inputDecoration(
-                                "Orientación de Filas",
-                                Icons.explore_outlined,
-                              ),
+                              decoration: _inputDecoration("Orientación", Icons.explore_outlined),
                               items: const [
-                                DropdownMenuItem<String>(
-                                  value: "Norte - Sur",
-                                  child: Text("Norte - Sur (Recomendada)"),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: "Este - Oeste",
-                                  child: Text("Este - Oeste"),
-                                ),
-                                DropdownMenuItem<String>(
-                                  value: "Nororiente - Surponiente",
-                                  child: Text("Diagonal / Otra"),
-                                ),
+                                DropdownMenuItem(value: "Norte - Sur", child: Text("Norte - Sur (Recomendada)")),
+                                DropdownMenuItem(value: "Este - Oeste", child: Text("Este - Oeste")),
+                                DropdownMenuItem(value: "Diagonal / Otra", child: Text("Diagonal / Otra")),
                               ],
-                              onChanged: (v) => setModalState(
-                                () =>
-                                    orientacionSeleccionada = v ?? "Norte - Sur",
-                              ),
+                              onChanged: (v) => setModalState(() => orientacionSeleccionada = v ?? "Norte - Sur"),
                             ),
                             const SizedBox(height: 20),
                           ],
@@ -878,15 +909,10 @@ class _InventarioPlantacionScreenState
                           final db = await DatabaseHelper.instance.database;
 
                           final int sigId = await DatabaseHelper.instance
-                              .obtenerSiguienteId(
-                                  'inventario_plantacion', 'id');
+                              .obtenerSiguienteId('inventario_plantacion', 'id');
 
-                          final double distF = double.tryParse(
-                                  distFilaCtrl.text.replaceAll(',', '.')) ??
-                              0.0;
-                          final double distA = double.tryParse(
-                                  distArbolCtrl.text.replaceAll(',', '.')) ??
-                              0.0;
+                          final double distF = double.tryParse(distFilaCtrl.text.replaceAll(',', '.')) ?? 0.0;
+                          final double distA = double.tryParse(distArbolCtrl.text.replaceAll(',', '.')) ?? 0.0;
 
                           final rowInv = {
                             'id': sigId,
@@ -897,28 +923,20 @@ class _InventarioPlantacionScreenState
                             'cuadro': cuadroActual['cuadro'],
                             'cultivo': cultivoSeleccionado,
                             'variedad': variedadSeleccionada,
-                            'ano_plantacion':
-                                int.tryParse(anoCtrl.text.trim()) ??
-                                    DateTime.now().year,
-                            'ha': double.tryParse(
-                                    haCtrl.text.trim().replaceAll(',', '.')) ??
-                                0.0,
-                            'plantas':
-                                int.tryParse(plantasCtrl.text.trim()) ?? 0,
+                            'ano_plantacion': int.tryParse(anoCtrl.text.trim()) ?? DateTime.now().year,
+                            'ha': double.tryParse(haCtrl.text.trim().replaceAll(',', '.')) ?? 0.0,
+                            'plantas': int.tryParse(plantasCtrl.text.trim()) ?? 0,
                             'marco_plantacion': (distF * distA).round(),
                             'up': upCtrl.text.trim(),
                             'dist_arbol': distA,
                             'dist_fila': distF,
                             'orientacion': orientacionSeleccionada,
-                            'sitema_riego':
-                                cuadroActual['sitema_riego'] ?? 'Goteo',
-                            'sistema_def':
-                                cuadroActual['sistema_def'] ?? 'Ninguna',
+                            'sitema_riego': cuadroActual['sitema_riego'] ?? 'Goteo',
+                            'sistema_def': cuadroActual['sistema_def'] ?? 'Ninguna',
                           };
 
                           await db.insert('inventario_plantacion', rowInv);
-                          await _sincronizarRemoto(
-                              'inventario_plantacion', rowInv);
+                          await _sincronizarRemoto('inventario_plantacion', rowInv);
 
                           if (!mounted) return;
                           Navigator.pop(ctx);
@@ -927,20 +945,15 @@ class _InventarioPlantacionScreenState
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              backgroundColor: AgroTheme.colorAccent,
-                              content: Text(
-                                  "¡Cuartel de plantación registrado con éxito!"),
+                              backgroundColor: Color(0xFF1E6B4C),
+                              content: Text("¡Cuartel de plantación registrado con éxito!"),
                             ),
                           );
                         },
                         child: const Center(
                           child: Text(
                             "Guardar Plantación",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 14,
-                            ),
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
                           ),
                         ),
                       ),
@@ -983,20 +996,18 @@ class _InventarioPlantacionScreenState
               ),
               const SizedBox(height: 18),
               ListTile(
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 tileColor: AgroTheme.colorBg,
                 leading: Container(
                   padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                      color: AgroTheme.colorAccentDark.withOpacity(0.12),
-                      shape: BoxShape.circle),
-                  child: const Icon(Icons.grid_view_rounded,
-                      color: AgroTheme.colorAccentDark, size: 22),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFE8F5E9),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.grid_view_rounded, color: Color(0xFF2E7D32), size: 22),
                 ),
                 title: const Text("1. Nuevo Cuadro / Parcela",
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 subtitle: const Text(
                     "Define la parcela madre, riego, defensa y superficie total.",
                     style: TextStyle(fontSize: 11.5)),
@@ -1008,20 +1019,18 @@ class _InventarioPlantacionScreenState
               ),
               const SizedBox(height: 10),
               ListTile(
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 tileColor: AgroTheme.colorBg,
                 leading: Container(
                   padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                      color: AgroTheme.colorGold.withOpacity(0.12),
-                      shape: BoxShape.circle),
-                  child: const Icon(Icons.park_outlined,
-                      color: AgroTheme.colorGold, size: 22),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFFF8E1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.park_outlined, color: Color(0xFF8A6A1E), size: 22),
                 ),
                 title: const Text("2. Nuevo Cuartel de Plantación",
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 subtitle: const Text(
                     "Asigna especie, variedad, marco y densidad dentro de un cuadro.",
                     style: TextStyle(fontSize: 11.5)),
@@ -1109,40 +1118,26 @@ class _InventarioPlantacionScreenState
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: AgroTheme.colorBg,
-                          borderRadius:
-                              BorderRadius.circular(AgroTheme.radiusMd),
+                          borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
                           border: Border.all(color: AgroTheme.colorBorder),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
-                            _buildDetalleDato(
-                                "Superficie", "${ha.toStringAsFixed(2)} Ha"),
-                            _buildDetalleDato(
-                                "Variedad", "${item['variedad']}"),
+                            _buildDetalleDato("Superficie", "${ha.toStringAsFixed(2)} Ha"),
+                            _buildDetalleDato("Variedad", "${item['variedad']}"),
                             _buildDetalleDato("Especie", "${item['cultivo']}"),
                           ],
                         ),
                       ),
                       const SizedBox(height: 16),
-                      _buildFilaAtributo(Icons.date_range_rounded,
-                          "Año de Plantación", "$ano ($edad)"),
-                      _buildFilaAtributo(Icons.forest_rounded,
-                          "Cantidad de Plantas", "${item['plantas'] ?? 'S/D'} plantas"),
-                      _buildFilaAtributo(
-                          Icons.grid_4x4_rounded,
-                          "Marco de Plantación",
-                          "${item['dist_fila'] ?? '-'}m x ${item['dist_arbol'] ?? '-'}m"),
-                      _buildFilaAtributo(Icons.water_drop_outlined,
-                          "Sistema de Riego", "${item['sitema_riego'] ?? 'Goteo'}"),
-                      _buildFilaAtributo(
-                          Icons.shield_outlined,
-                          "Defensa Antigranizo / Helada",
-                          "${item['sistema_def'] ?? 'Ninguna'}"),
-                      _buildFilaAtributo(Icons.explore_outlined,
-                          "Orientación de Filas", "${item['orientacion'] ?? 'Norte - Sur'}"),
-                      _buildFilaAtributo(Icons.badge_outlined,
-                          "Unidad Productora (UP)", "${item['up'] ?? 'S/D'}"),
+                      _buildFilaAtributo(Icons.date_range_rounded, "Año de Plantación", "$ano ($edad)"),
+                      _buildFilaAtributo(Icons.forest_rounded, "Cantidad de Plantas", "${item['plantas'] ?? 'S/D'} plantas"),
+                      _buildFilaAtributo(Icons.grid_4x4_rounded, "Marco de Plantación", "${item['dist_fila'] ?? '-'}m x ${item['dist_arbol'] ?? '-'}m"),
+                      _buildFilaAtributo(Icons.water_drop_outlined, "Sistema de Riego", "${item['sitema_riego'] ?? 'Goteo'}"),
+                      _buildFilaAtributo(Icons.shield_outlined, "Defensa Antigranizo / Helada", "${item['sistema_def'] ?? 'Ninguna'}"),
+                      _buildFilaAtributo(Icons.explore_outlined, "Orientación de Filas", "${item['orientacion'] ?? 'Norte - Sur'}"),
+                      _buildFilaAtributo(Icons.badge_outlined, "Unidad Productora (UP)", "${item['up'] ?? 'S/D'}"),
                     ],
                   ),
                 ),
@@ -1158,16 +1153,10 @@ class _InventarioPlantacionScreenState
     return Column(
       children: [
         Text(titulo,
-            style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AgroTheme.colorTextSecondary)),
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
         const SizedBox(height: 3),
         Text(valor,
-            style: const TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w800,
-                color: AgroTheme.colorText)),
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
       ],
     );
   }
@@ -1177,20 +1166,14 @@ class _InventarioPlantacionScreenState
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: AgroTheme.colorAccentDark),
+          Icon(icon, size: 18, color: const Color(0xFF1E6B4C)),
           const SizedBox(width: 12),
           Expanded(
             child: Text(label,
-                style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: AgroTheme.colorTextSecondary)),
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
           ),
           Text(value,
-              style: const TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w800,
-                  color: AgroTheme.colorText)),
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
         ],
       ),
     );
@@ -1204,8 +1187,7 @@ class _InventarioPlantacionScreenState
         backgroundColor: AgroTheme.colorSurface.withOpacity(0.92),
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              size: 20, color: AgroTheme.colorText),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AgroTheme.colorText),
           onPressed: () => Navigator.pop(context),
         ),
         title: Column(
@@ -1213,33 +1195,38 @@ class _InventarioPlantacionScreenState
           children: [
             const Text(
               "Inventario de Plantación",
-              style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16.5,
-                  color: AgroTheme.colorText),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
             ),
             if (_selectedNombreProductor.isNotEmpty)
               Text(
                 _selectedNombreProductor,
-                style: const TextStyle(
-                    fontSize: 11.5,
-                    color: AgroTheme.colorTextSecondary,
-                    fontWeight: FontWeight.w500),
+                style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
               ),
           ],
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.table_view_rounded, color: Color(0xFF2E7D32)),
+            tooltip: "Exportar a Excel",
+            onPressed: _inventarioFiltrado.isEmpty ? null : _exportarExcelInventario,
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E6B4C)),
+            tooltip: "Recargar",
+            onPressed: _cargarDatosCompletos,
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
       body: SafeArea(
         child: Column(
           children: [
-            if (_esIngenieroOAdminGlobal && _productores.isNotEmpty)
+            if (_esIngenieroOAdmin && _productores.isNotEmpty)
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 color: AgroTheme.colorSurface,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
                   decoration: BoxDecoration(
                     color: AgroTheme.colorBg,
                     borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
@@ -1257,8 +1244,7 @@ class _InventarioPlantacionScreenState
                       items: _productores.map((p) {
                         return DropdownMenuItem<int>(
                           value: p['cod_productor'] as int,
-                          child: Text(
-                              "${p['productor']} (CUIT: ${p['cuit'] ?? 'S/D'})",
+                          child: Text("${p['productor']} (CUIT: ${p['cuit'] ?? 'S/D'})",
                               overflow: TextOverflow.ellipsis),
                         );
                       }).toList(),
@@ -1267,11 +1253,7 @@ class _InventarioPlantacionScreenState
                           setState(() {
                             _selectedCodProductor = val;
                             _selectedNombreProductor =
-                                (_productores.firstWhere(
-                                            (p) => p['cod_productor'] == val)[
-                                        'productor'] ??
-                                    '')
-                                .toString();
+                                (_productores.firstWhere((p) => p['cod_productor'] == val)['productor'] ?? '').toString();
                           });
                           _cargarDatosCompletos();
                         }
@@ -1283,38 +1265,23 @@ class _InventarioPlantacionScreenState
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   color: AgroTheme.colorSurface,
                   borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
                   border: Border.all(color: AgroTheme.colorBorder),
                   boxShadow: const [
-                    BoxShadow(
-                        color: Color(0x06141E18),
-                        blurRadius: 10,
-                        offset: Offset(0, 3)),
+                    BoxShadow(color: Color(0x06141E18), blurRadius: 10, offset: Offset(0, 3)),
                   ],
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildKpiItem(
-                        "Superficie",
-                        "${_superficieTotal.toStringAsFixed(1)} Ha",
-                        Icons.terrain_rounded),
-                    Container(
-                        height: 28, width: 1, color: AgroTheme.colorBorder),
-                    _buildKpiItem(
-                        "Plantas",
-                        NumberFormat.compact().format(_plantasTotales),
-                        Icons.park_outlined),
-                    Container(
-                        height: 28, width: 1, color: AgroTheme.colorBorder),
-                    _buildKpiItem(
-                        "Densidad",
-                        "${_densidadPromedio.toStringAsFixed(0)} Pl/Ha",
-                        Icons.scatter_plot_outlined),
+                    _buildKpiItem("Superficie", "${_superficieTotal.toStringAsFixed(1)} Ha", Icons.terrain_rounded),
+                    Container(height: 28, width: 1, color: AgroTheme.colorBorder),
+                    _buildKpiItem("Plantas", NumberFormat.compact().format(_plantasTotales), Icons.park_outlined),
+                    Container(height: 28, width: 1, color: AgroTheme.colorBorder),
+                    _buildKpiItem("Densidad", "${_densidadPromedio.toStringAsFixed(0)} Pl/Ha", Icons.scatter_plot_outlined),
                   ],
                 ),
               ),
@@ -1335,20 +1302,16 @@ class _InventarioPlantacionScreenState
                     return ChoiceChip(
                       label: Text(ch == "TODAS" ? "Todas las Chacras" : ch),
                       selected: isSelected,
-                      selectedColor: AgroTheme.colorAccentDark,
+                      selectedColor: const Color(0xFF1E6B4C),
                       labelStyle: TextStyle(
                         fontSize: 12,
-                        fontWeight:
-                            isSelected ? FontWeight.w800 : FontWeight.w600,
+                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
                         color: isSelected ? Colors.white : AgroTheme.colorText,
                       ),
                       backgroundColor: AgroTheme.colorSurface,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(
-                            color: isSelected
-                                ? AgroTheme.colorAccentDark
-                                : AgroTheme.colorBorder),
+                        side: BorderSide(color: isSelected ? const Color(0xFF1E6B4C) : AgroTheme.colorBorder),
                       ),
                       onSelected: (selected) {
                         if (selected) {
@@ -1370,14 +1333,11 @@ class _InventarioPlantacionScreenState
                 child: TextField(
                   controller: _searchCtrl,
                   onChanged: (val) => setState(() => _filtroTexto = val),
-                  style: const TextStyle(
-                      color: AgroTheme.colorText, fontSize: 13.5),
+                  style: const TextStyle(color: AgroTheme.colorText, fontSize: 13.5),
                   decoration: const InputDecoration(
                     hintText: "Buscar por cuadro, variedad, cultivo o UP...",
-                    hintStyle: TextStyle(
-                        color: AgroTheme.colorTextSecondary, fontSize: 12.5),
-                    prefixIcon: Icon(Icons.search_rounded,
-                        color: AgroTheme.colorTextSecondary, size: 18),
+                    hintStyle: TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 12.5),
+                    prefixIcon: Icon(Icons.search_rounded, color: AgroTheme.colorTextSecondary, size: 18),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.symmetric(vertical: 12),
                   ),
@@ -1386,9 +1346,7 @@ class _InventarioPlantacionScreenState
             ),
             Expanded(
               child: _cargando
-                  ? const Center(
-                      child: CircularProgressIndicator(
-                          color: AgroTheme.colorAccent))
+                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
                   : _inventarioFiltrado.isEmpty
                       ? Center(
                           child: SingleChildScrollView(
@@ -1398,90 +1356,44 @@ class _InventarioPlantacionScreenState
                               children: [
                                 Container(
                                   padding: const EdgeInsets.all(20),
-                                  decoration: BoxDecoration(
-                                    color: AgroTheme.colorAccent.withOpacity(0.08),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFE8F5E9),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: const Icon(
-                                      Icons.nature_people_rounded,
-                                      size: 54,
-                                      color: AgroTheme.colorAccentDark),
+                                  child: const Icon(Icons.nature_people_rounded, size: 54, color: Color(0xFF2E7D32)),
                                 ),
                                 const SizedBox(height: 16),
                                 const Text(
                                   "Sin Plantaciones Registradas",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 17,
-                                      color: AgroTheme.colorText),
+                                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: AgroTheme.colorText),
                                 ),
                                 const SizedBox(height: 8),
                                 const Text(
-                                  "Tu establecimiento no cuenta aún con cuarteles cargados.\nPodes registrar tu primer cuadro o tu plantación ahora mismo.",
+                                  "Tu establecimiento no cuenta aún con cuarteles cargados.\nPodes registrar tu primer cuadro y cuartel de plantación ahora mismo.",
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      color: AgroTheme.colorTextSecondary,
-                                      height: 1.4),
+                                  style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, height: 1.4),
                                 ),
                                 const SizedBox(height: 24),
-                                // 💡 Botones visibles para ADMIN / ADM / PROD-ADM
-                                if (_puedeEditar) ...[
-                                  Wrap(
-                                    spacing: 12,
-                                    runSpacing: 10,
-                                    alignment: WrapAlignment.center,
-                                    children: [
-                                      SizedBox(
-                                        width: 190,
-                                        height: 46,
-                                        child: SoftButton(
-                                          borderRadius: 23,
-                                          onTap: _mostrarModalNuevoCuadro,
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: const [
-                                              Icon(Icons.grid_view_rounded,
-                                                  color: Colors.white, size: 18),
-                                              SizedBox(width: 8),
-                                              Text(
-                                                "Nuevo Cuadro",
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 13),
-                                              ),
-                                            ],
+                                if (_puedeEditar)
+                                  SizedBox(
+                                    width: 240,
+                                    height: 48,
+                                    child: SoftButton(
+                                      borderRadius: 24,
+                                      onTap: _mostrarOpcionesCarga,
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: const [
+                                          Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 18),
+                                          SizedBox(width: 8),
+                                          Text(
+                                            "Cargar Mi Primer Cuadro",
+                                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13.5),
                                           ),
-                                        ),
+                                        ],
                                       ),
-                                      SizedBox(
-                                        width: 190,
-                                        height: 46,
-                                        child: SoftButton(
-                                          isSecondary: true,
-                                          borderRadius: 23,
-                                          onTap: _mostrarModalNuevaPlantacion,
-                                          child: Row(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: const [
-                                              Icon(Icons.park_outlined,
-                                                  color: AgroTheme.colorAccentDark, size: 18),
-                                              SizedBox(width: 8),
-                                              Text(
-                                                "Nueva Plantación",
-                                                style: TextStyle(
-                                                    color: AgroTheme.colorAccentDark,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 13),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                                    ),
                                   ),
-                                ],
                               ],
                             ),
                           ),
@@ -1489,8 +1401,7 @@ class _InventarioPlantacionScreenState
                       : ListView.separated(
                           padding: const EdgeInsets.fromLTRB(20, 6, 20, 85),
                           itemCount: _inventarioFiltrado.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, idx) {
                             final item = _inventarioFiltrado[idx];
                             return _ParcelaCard(
@@ -1503,11 +1414,9 @@ class _InventarioPlantacionScreenState
           ],
         ),
       ),
-      // 💡 Botón flotante habilitado para cualquier rol administrativo
       floatingActionButton: _puedeEditar
           ? SoftButton(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               borderRadius: 28,
               onTap: _mostrarOpcionesCarga,
               child: Row(
@@ -1517,10 +1426,7 @@ class _InventarioPlantacionScreenState
                   SizedBox(width: 6),
                   Text(
                     "Cargar Parcela / Plantación",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14),
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
                   ),
                 ],
               ),
@@ -1532,21 +1438,15 @@ class _InventarioPlantacionScreenState
   Widget _buildKpiItem(String titulo, String valor, IconData icon) {
     return Row(
       children: [
-        Icon(icon, size: 20, color: AgroTheme.colorAccentDark),
+        Icon(icon, size: 20, color: const Color(0xFF1E6B4C)),
         const SizedBox(width: 8),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(titulo,
-                style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: AgroTheme.colorTextSecondary)),
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
             Text(valor,
-                style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w800,
-                    color: AgroTheme.colorText)),
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
           ],
         ),
       ],
@@ -1593,17 +1493,11 @@ class _ParcelaCardState extends State<_ParcelaCard> {
           color: _isPressed ? AgroTheme.colorActiveBg : AgroTheme.colorSurface,
           borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
           border: Border.all(
-            color: _isPressed
-                ? AgroTheme.colorActiveBorder
-                : AgroTheme.colorBorder,
+            color: _isPressed ? AgroTheme.colorActiveBorder : AgroTheme.colorBorder,
             width: 1.2,
           ),
           boxShadow: const [
-            BoxShadow(
-              color: Color(0x04141E18),
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
+            BoxShadow(color: Color(0x04141E18), blurRadius: 8, offset: Offset(0, 2)),
           ],
         ),
         child: Column(
@@ -1615,36 +1509,26 @@ class _ParcelaCardState extends State<_ParcelaCard> {
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 9, vertical: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                       decoration: BoxDecoration(
-                        color: AgroTheme.colorAccentDark,
+                        color: const Color(0xFFE8F5E9),
                         borderRadius: BorderRadius.circular(7),
                       ),
                       child: Text(
                         "Cuadro ${item['cuadro'] ?? ''}",
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 12),
+                        style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w800, fontSize: 12),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Text(
                       "${item['chacra'] ?? ''}",
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                          color: AgroTheme.colorText),
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AgroTheme.colorText),
                     ),
                   ],
                 ),
                 Text(
                   "${ha.toStringAsFixed(2)} Ha",
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: AgroTheme.colorAccentDark),
+                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF1E6B4C)),
                 ),
               ],
             ),
@@ -1653,17 +1537,11 @@ class _ParcelaCardState extends State<_ParcelaCard> {
               children: [
                 Text(
                   "$variedad ",
-                  style: const TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w800,
-                      color: AgroTheme.colorText),
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText),
                 ),
                 Text(
                   "($cultivo)",
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AgroTheme.colorTextSecondary),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary),
                 ),
               ],
             ),
@@ -1680,8 +1558,7 @@ class _ParcelaCardState extends State<_ParcelaCard> {
                   _buildMiniTag("Plantación", "$ano"),
                   _buildMiniTag("Plantas", "$plantas"),
                   _buildMiniTag("Riego", "$riego"),
-                  const Icon(Icons.arrow_forward_ios_rounded,
-                      size: 13, color: AgroTheme.colorTextSecondary),
+                  const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: AgroTheme.colorTextSecondary),
                 ],
               ),
             ),
@@ -1696,15 +1573,9 @@ class _ParcelaCardState extends State<_ParcelaCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(
-                fontSize: 9.5,
-                fontWeight: FontWeight.w600,
-                color: AgroTheme.colorTextSecondary)),
+            style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
         Text(value,
-            style: const TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w800,
-                color: AgroTheme.colorText)),
+            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
       ],
     );
   }

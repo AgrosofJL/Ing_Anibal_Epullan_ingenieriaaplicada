@@ -34,7 +34,9 @@ dependencies:
   google_maps_flutter: ^2.18.0
   sqflite_common_ffi_web: ^1.1.1
   printing: ^5.14.3
+  open_filex: ^4.5.0
   
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

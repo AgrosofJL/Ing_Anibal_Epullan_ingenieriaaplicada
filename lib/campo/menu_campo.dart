@@ -17,6 +17,9 @@ class MenuCampoScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double ancho = MediaQuery.of(context).size.width;
+    final bool esDesktop = ancho >= 800;
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
       appBar: AppBar(
@@ -31,7 +34,7 @@ class MenuCampoScreen extends StatelessWidget {
           children: [
             const Text(
               "Monitoreo de Campo",
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: AgroTheme.colorText),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
             ),
             Text(
               nombreProductor,
@@ -41,102 +44,116 @@ class MenuCampoScreen extends StatelessWidget {
         ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Operaciones de Lote",
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AgroTheme.colorText, letterSpacing: -0.4),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                "Seguimiento fenológico, trampeo de plagas e inventario botánico.",
-                style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 20),
-
-              GridView.count(
-                crossAxisCount: MediaQuery.of(context).size.width > 600 ? 2 : 1,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                childAspectRatio: MediaQuery.of(context).size.width > 600 ? 1.6 : 2.3,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.symmetric(horizontal: esDesktop ? 28 : 20, vertical: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildCard(
-                    context: context,
-                    titulo: "Estados Fenológicos",
-                    descripcion: "Lectura de estados de yemas, flores, cuaje y temperaturas críticas.",
-                    icono: Icons.eco_outlined,
-                    colorIcono: AgroTheme.colorAccentDark,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => FenologiaScreen(
-                            codProductor: codProductor,
-                            nombreProductor: nombreProductor,
-                          ),
-                        ),
-                      );
-                    },
+                  const Text(
+                    "Operaciones y Control de Lote",
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      color: AgroTheme.colorText,
+                      letterSpacing: -0.4,
+                    ),
                   ),
-                  _buildCard(
-                    context: context,
-                    titulo: "Ubicación de Trampas",
-                    descripcion: "Mapeo, colocación y georreferenciación de trampas de plagas en campo.",
-                    icono: Icons.my_location_rounded,
-                    colorIcono: const Color(0xFFB8862A),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => TrampasUbicacionScreen(
-                            codProductor: codProductor,
-                            nombreProductor: nombreProductor,
-                          ),
-                        ),
-                      );
-                    },
+                  const SizedBox(height: 4),
+                  const Text(
+                    "Seguimiento fenológico, trampeo fitosanitario e inventario botánico.",
+                    style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
                   ),
-                  _buildCard(
-                    context: context,
-                    titulo: "Lecturas de Trampas",
-                    descripcion: "Recuento semanal de capturas (Carpocapsa, Grafolita, machos/hembras).",
-                    icono: Icons.pest_control_outlined,
-                    colorIcono: AgroTheme.colorDanger,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => LecturasTrampasScreen(
-                            codProductor: codProductor,
-                            nombreProductor: nombreProductor,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildCard(
-                    context: context,
-                    titulo: "Inventario de Plantación",
-                    descripcion: "Consulta de cuadros, hectáreas, variedad, portainjerto y riego.",
-                    icono: Icons.park_outlined,
-                    colorIcono: const Color(0xFF1E6B4C),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const InventarioPlantacionScreen(),
-                        ),
-                      );
-                    },
+                  const SizedBox(height: 20),
+
+                  GridView.count(
+                    crossAxisCount: esDesktop ? 2 : 1,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: esDesktop ? 2.2 : 2.5,
+                    children: [
+                      _buildCard(
+                        context: context,
+                        titulo: "Estados Fenológicos",
+                        descripcion: "Lectura de yemas, floración, cuaje y curvas de evolución.",
+                        icono: Icons.eco_outlined,
+                        colorIcono: const Color(0xFF2E7D32),
+                        fondoIcono: const Color(0xFFE8F5E9),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => FenologiaScreen(
+                                codProductor: codProductor,
+                                nombreProductor: nombreProductor,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildCard(
+                        context: context,
+                        titulo: "Ubicación de Trampas",
+                        descripcion: "Mapeo satelital, georreferenciación GPS y QR de trampas.",
+                        icono: Icons.my_location_rounded,
+                        colorIcono: const Color(0xFF8A6A1E),
+                        fondoIcono: const Color(0xFFFFF8E1),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => TrampasUbicacionScreen(
+                                codProductor: codProductor,
+                                nombreProductor: nombreProductor,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildCard(
+                        context: context,
+                        titulo: "Lecturas de Trampas",
+                        descripcion: "Recuento semanal de capturas (Carpocapsa, Grafolita, umbrales).",
+                        icono: Icons.pest_control_outlined,
+                        colorIcono: const Color(0xFFC62828),
+                        fondoIcono: const Color(0xFFFFEBEE),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => LecturasTrampasScreen(
+                                codProductor: codProductor,
+                                nombreProductor: nombreProductor,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildCard(
+                        context: context,
+                        titulo: "Inventario de Plantación",
+                        descripcion: "Catastro de cuarteles, superficies, variedades, riego y UP.",
+                        icono: Icons.park_outlined,
+                        colorIcono: const Color(0xFF1E6B4C),
+                        fondoIcono: const Color(0xFFE8F5E9),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const InventarioPlantacionScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -149,31 +166,32 @@ class MenuCampoScreen extends StatelessWidget {
     required String descripcion,
     required IconData icono,
     required Color colorIcono,
+    required Color fondoIcono,
     required VoidCallback onTap,
   }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
       child: Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AgroTheme.colorSurface,
           borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
           border: Border.all(color: AgroTheme.colorBorder),
-          boxShadow: [
-            BoxShadow(color: const Color(0x04141E18), blurRadius: 10, offset: const Offset(0, 3)),
+          boxShadow: const [
+            BoxShadow(color: Color(0x04141E18), blurRadius: 10, offset: Offset(0, 3)),
           ],
         ),
         child: Row(
           children: [
             Container(
-              width: 50,
-              height: 50,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
-                color: colorIcono.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(14),
+                color: fondoIcono,
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icono, color: colorIcono, size: 26),
+              child: Icon(icono, color: colorIcono, size: 24),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -181,13 +199,19 @@ class MenuCampoScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(titulo, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15.5, color: AgroTheme.colorText)),
-                  const SizedBox(height: 4),
-                  Text(descripcion, style: const TextStyle(fontSize: 12, color: AgroTheme.colorTextSecondary, height: 1.3)),
+                  Text(
+                    titulo,
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AgroTheme.colorText),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    descripcion,
+                    style: const TextStyle(fontSize: 12, color: AgroTheme.colorTextSecondary, height: 1.25),
+                  ),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AgroTheme.colorTextSecondary),
+            const Icon(Icons.chevron_right_rounded, size: 20, color: AgroTheme.colorTextSecondary),
           ],
         ),
       ),
