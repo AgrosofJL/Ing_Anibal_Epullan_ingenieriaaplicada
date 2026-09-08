@@ -128,15 +128,15 @@ class ServicioExportarOrdenPdf {
                     children: [
                       if (logoImage != null)
                         pw.Container(
-                          width: 50,
-                          height: 50,
+                          width: 70,
+                          height: 70,
                           margin: const pw.EdgeInsets.only(right: 12),
                           child: pw.Image(logoImage, fit: pw.BoxFit.contain),
                         )
                       else
                         pw.Container(
-                          width: 50,
-                          height: 50,
+                          width: 70,
+                          height: 70,
                           margin: const pw.EdgeInsets.only(right: 12),
                           decoration: pw.BoxDecoration(
                             color: const PdfColor.fromInt(0xFF1E6B4C),
