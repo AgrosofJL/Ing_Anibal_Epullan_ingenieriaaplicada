@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -46,7 +47,7 @@ class ServicioExportarOrdenPdf {
         (orden['items'] as List?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [];
 
     // =========================================================================
-    // 💡 CONSULTA A catalogo_insumos PARA OBTENER T_C Y TRI REALES
+    // CONSULTA A catalogo_insumos PARA OBTENER T_C Y TRI REALES
     // =========================================================================
     final List<Map<String, dynamic>> itemsEnriquecidos = [];
 
@@ -96,7 +97,7 @@ class ServicioExportarOrdenPdf {
     }
 
     // =========================================================================
-    // 💡 ACA ES LO NUEVO: CONSULTA DE PARÁMETROS TÉCNICOS (parametros_aplic)
+    // CONSULTA DE PARÁMETROS TÉCNICOS (parametros_aplic)
     // =========================================================================
     Map<String, dynamic> parametros = {};
     try {
@@ -142,27 +143,41 @@ class ServicioExportarOrdenPdf {
                             borderRadius: pw.BorderRadius.circular(8),
                           ),
                           child: pw.Center(
-                            child: pw.Text('AGRO',
-                                style: pw.TextStyle(
-                                    color: PdfColors.white,
-                                    fontSize: 10,
-                                    fontWeight: pw.FontWeight.bold)),
+                            child: pw.Text(
+                              'AGRO',
+                              style: pw.TextStyle(
+                                color: PdfColors.white,
+                                fontSize: 10,
+                                fontWeight: pw.FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
                       pw.Column(
                         crossAxisAlignment: pw.CrossAxisAlignment.start,
                         children: [
-                          pw.Text("Ing. Agronomo Anibal Epullan",
-                              style: pw.TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: pw.FontWeight.bold,
-                                  color: const PdfColor.fromInt(0xFF123F2C))),
-                          pw.Text("SOLUCIONES INTEGRALES AGROPECUARIAS",
-                              style: const pw.TextStyle(
-                                  fontSize: 8, color: PdfColors.grey700)),
-                          pw.Text("RÍO NEGRO",
-                              style: const pw.TextStyle(
-                                  fontSize: 8, color: PdfColors.grey600)),
+                          pw.Text(
+                            "Ing. Agronomo Anibal Epullan",
+                            style: pw.TextStyle(
+                              fontSize: 15,
+                              fontWeight: pw.FontWeight.bold,
+                              color: const PdfColor.fromInt(0xFF123F2C),
+                            ),
+                          ),
+                          pw.Text(
+                            "SOLUCIONES INTEGRALES AGROPECUARIAS",
+                            style: const pw.TextStyle(
+                              fontSize: 8,
+                              color: PdfColors.grey700,
+                            ),
+                          ),
+                          pw.Text(
+                            "RÍO NEGRO",
+                            style: const pw.TextStyle(
+                              fontSize: 8,
+                              color: PdfColors.grey600,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -173,24 +188,36 @@ class ServicioExportarOrdenPdf {
                       color: const PdfColor.fromInt(0xFFF3F5F1),
                       borderRadius: pw.BorderRadius.circular(8),
                       border: pw.Border.all(
-                          color: const PdfColor.fromInt(0xFF1E6B4C), width: 1),
+                        color: const PdfColor.fromInt(0xFF1E6B4C),
+                        width: 1,
+                      ),
                     ),
                     child: pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.end,
                       children: [
-                        pw.Text("ORDEN TÉCNICA",
-                            style: pw.TextStyle(
-                                fontSize: 9,
-                                fontWeight: pw.FontWeight.bold,
-                                color: const PdfColor.fromInt(0xFF1E6B4C))),
-                        pw.Text("#$codOrden",
-                            style: pw.TextStyle(
-                                fontSize: 16,
-                                fontWeight: pw.FontWeight.bold,
-                                color: const PdfColor.fromInt(0xFF1B231D))),
-                        pw.Text("Fecha: $fecha",
-                            style: const pw.TextStyle(
-                                fontSize: 9, color: PdfColors.grey800)),
+                        pw.Text(
+                          "ORDEN TÉCNICA",
+                          style: pw.TextStyle(
+                            fontSize: 9,
+                            fontWeight: pw.FontWeight.bold,
+                            color: const PdfColor.fromInt(0xFF1E6B4C),
+                          ),
+                        ),
+                        pw.Text(
+                          "#$codOrden",
+                          style: pw.TextStyle(
+                            fontSize: 16,
+                            fontWeight: pw.FontWeight.bold,
+                            color: const PdfColor.fromInt(0xFF1B231D),
+                          ),
+                        ),
+                        pw.Text(
+                          "Fecha: $fecha",
+                          style: const pw.TextStyle(
+                            fontSize: 9,
+                            color: PdfColors.grey800,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -284,19 +311,23 @@ class ServicioExportarOrdenPdf {
           ),
           pw.SizedBox(height: 14),
 
-          pw.Text("DETALLE DE LA RECETA Y DOSIFICACIÓN (MÁQUINA 2.000 LTS)",
-              style: pw.TextStyle(
-                  fontSize: 10,
-                  fontWeight: pw.FontWeight.bold,
-                  color: const PdfColor.fromInt(0xFF1E6B4C))),
+          pw.Text(
+            "DETALLE DE LA RECETA Y DOSIFICACIÓN (MÁQUINA 2.000 LTS)",
+            style: pw.TextStyle(
+              fontSize: 10,
+              fontWeight: pw.FontWeight.bold,
+              color: const PdfColor.fromInt(0xFF1E6B4C),
+            ),
+          ),
           pw.SizedBox(height: 5),
 
           pw.TableHelper.fromTextArray(
             border: pw.TableBorder.all(color: const PdfColor.fromInt(0xFFE5E7EB), width: 0.8),
             headerStyle: pw.TextStyle(
-                fontSize: 8,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.white),
+              fontSize: 8,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.white,
+            ),
             headerDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1E6B4C)),
             cellStyle: const pw.TextStyle(fontSize: 8, color: PdfColors.black),
             cellAlignment: pw.Alignment.centerLeft,
@@ -304,7 +335,7 @@ class ServicioExportarOrdenPdf {
             headers: [
               '#',
               'PRODUCTO / INSUMO',
-              'DOSIS / 100L',
+              'DOSIS ASIGNADA',
               'DOSIS x MÁQ (2.000L)',
               'T.C.',
               'T.R.I.'
@@ -312,6 +343,11 @@ class ServicioExportarOrdenPdf {
             data: itemsEnriquecidos.asMap().entries.map((entry) {
               final idx = entry.key + 1;
               final item = entry.value;
+
+              final bool esPorHa = item['modalidad_dosis'] == 'DOSIS_HA';
+              final String dosisTexto = esPorHa
+                  ? "${item['dosis_entrada'] ?? item['dosis_100']} L-Kg / Ha"
+                  : "${item['dosis_100'] ?? '0'} L-Kg / 100L";
 
               final String tcValor = (item['T_C'] != null &&
                       item['T_C'].toString().isNotEmpty &&
@@ -328,7 +364,7 @@ class ServicioExportarOrdenPdf {
               return [
                 idx.toString(),
                 item['producto']?.toString() ?? item['Descripcion1']?.toString() ?? '',
-                "${item['dosis_100'] ?? '0'} Lts/Kg",
+                dosisTexto,
                 "${item['dosis_maq'] ?? '0'} Lts/Kg",
                 tcValor,
                 triValor,
@@ -338,7 +374,7 @@ class ServicioExportarOrdenPdf {
           pw.SizedBox(height: 10),
 
           // ===================================================================
-          // 💡 ACA ES LO NUEVO: CUADRO DE PARÁMETROS TÉCNICOS DE PULVERIZACIÓN
+          // CUADRO DE PARÁMETROS TÉCNICOS DE PULVERIZACIÓN
           // ===================================================================
           pw.Container(
             padding: const pw.EdgeInsets.all(8),
@@ -364,7 +400,7 @@ class ServicioExportarOrdenPdf {
                   children: [
                     _buildParametroItem("Vel. Viento", parametros['vel_viento'] ?? '5-10 km/h'),
                     _buildParametroItem("Temperatura", parametros['Temperatura'] ?? '18-22 °C'),
-                    _buildParametroItem("Tamaño Gota", parametros['Tamano_gota'] ?? '200-300 µm'),
+                    _buildParametroItem("Tamaño Gota", parametros['Tamano_gota'] ?? 'Media (250 µm)'),
                     _buildParametroItem("Vel. Avance", parametros['Vel_Aplicacion'] ?? '5.5 km/h'),
                     _buildParametroItem("Caudal Estimado", parametros['Caudal_Ha'] ?? '$volHa L/Ha'),
                   ],
@@ -384,18 +420,24 @@ class ServicioExportarOrdenPdf {
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
-                pw.Text("INDICACIONES GENERALES DE SEGURIDAD:",
-                    style: pw.TextStyle(
-                        fontSize: 8,
-                        fontWeight: pw.FontWeight.bold,
-                        color: const PdfColor.fromInt(0xFF92400E))),
+                pw.Text(
+                  "INDICACIONES GENERALES DE SEGURIDAD:",
+                  style: pw.TextStyle(
+                    fontSize: 8,
+                    fontWeight: pw.FontWeight.bold,
+                    color: const PdfColor.fromInt(0xFF92400E),
+                  ),
+                ),
                 pw.SizedBox(height: 2),
                 pw.Text(
                   "• Respetar estrictamente el Tiempo de Carencia (T.C.) y Tiempo de Reingreso (T.R.I.) antes de cosechar o ingresar al cuadro.\n"
                   "• Usar equipo de protección personal completo (máscara con filtro, mameluco impermeable, guantes de nitrilo).\n"
                   "• Verificar condiciones meteorológicas: no aplicar con viento > 10 km/h ni con inversión térmica.",
                   style: const pw.TextStyle(
-                      fontSize: 7, color: PdfColor.fromInt(0xFF78350F), lineSpacing: 1.3),
+                    fontSize: 7,
+                    color: PdfColor.fromInt(0xFF78350F),
+                    lineSpacing: 1.3,
+                  ),
                 ),
               ],
             ),
@@ -409,20 +451,28 @@ class ServicioExportarOrdenPdf {
                 children: [
                   pw.Container(width: 170, height: 1, color: PdfColors.black),
                   pw.SizedBox(height: 4),
-                  pw.Text(responsable,
-                      style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
-                  pw.Text("RESPONSABLE TÉCNICO",
-                      style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+                  pw.Text(
+                    responsable,
+                    style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(
+                    "RESPONSABLE TÉCNICO",
+                    style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
+                  ),
                 ],
               ),
               pw.Column(
                 children: [
                   pw.Container(width: 170, height: 1, color: PdfColors.black),
                   pw.SizedBox(height: 4),
-                  pw.Text("FIRMA DEL OPERARIO / APLICADOR",
-                      style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
-                  pw.Text("CONFORMIDAD DE LABOR",
-                      style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700)),
+                  pw.Text(
+                    "FIRMA DEL OPERARIO / APLICADOR",
+                    style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.Text(
+                    "CONFORMIDAD DE LABOR",
+                    style: const pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
+                  ),
                 ],
               ),
             ],
@@ -457,17 +507,23 @@ class ServicioExportarOrdenPdf {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Text(label,
-            style: pw.TextStyle(
-                fontSize: 6.5,
-                fontWeight: pw.FontWeight.bold,
-                color: const PdfColor.fromInt(0xFF5F6B62))),
+        pw.Text(
+          label,
+          style: pw.TextStyle(
+            fontSize: 6.5,
+            fontWeight: pw.FontWeight.bold,
+            color: const PdfColor.fromInt(0xFF5F6B62),
+          ),
+        ),
         pw.SizedBox(height: 1),
-        pw.Text(valor,
-            style: pw.TextStyle(
-                fontSize: 8.5,
-                fontWeight: pw.FontWeight.bold,
-                color: const PdfColor.fromInt(0xFF1B231D))),
+        pw.Text(
+          valor,
+          style: pw.TextStyle(
+            fontSize: 8.5,
+            fontWeight: pw.FontWeight.bold,
+            color: const PdfColor.fromInt(0xFF1B231D),
+          ),
+        ),
       ],
     );
   }
@@ -476,15 +532,21 @@ class ServicioExportarOrdenPdf {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Text(label,
-            style: const pw.TextStyle(
-                fontSize: 6.5,
-                color: PdfColors.grey600)),
-        pw.Text(valor,
-            style: pw.TextStyle(
-                fontSize: 7.5,
-                fontWeight: pw.FontWeight.bold,
-                color: const PdfColor.fromInt(0xFF1B231D))),
+        pw.Text(
+          label,
+          style: const pw.TextStyle(
+            fontSize: 6.5,
+            color: PdfColors.grey600,
+          ),
+        ),
+        pw.Text(
+          valor,
+          style: pw.TextStyle(
+            fontSize: 7.5,
+            fontWeight: pw.FontWeight.bold,
+            color: const PdfColor.fromInt(0xFF1B231D),
+          ),
+        ),
       ],
     );
   }
