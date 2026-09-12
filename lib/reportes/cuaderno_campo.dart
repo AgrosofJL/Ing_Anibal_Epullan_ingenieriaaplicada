@@ -16,7 +16,7 @@ import '../constantes/tema.dart';
 import '../widgets/soft_button.dart';
 
 class CuadernoCampoScreen extends StatefulWidget {
-  const CuadernoCampoScreen({super.key});
+  const CuadernoCampoScreen({super.key, required int codProductor, required String nombreProductor});
 
   @override
   State<CuadernoCampoScreen> createState() => _CuadernoCampoScreenState();

@@ -84,7 +84,10 @@ class ServicioBajar {
       {'nombre': 'lecturas_fenologia', 'pk': 'id'},
       {'nombre': 'lecturas_trampas', 'pk': 'id'},
       {'nombre': 'parametros_aplic', 'pk': 'id'},
+      {'nombre': 'config_app_enlaces', 'pk': 'id'},
+      
     ];
+
 
     for (final t in tablas) {
       final String tabla = t['nombre']!;

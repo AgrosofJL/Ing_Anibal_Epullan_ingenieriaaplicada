@@ -4,7 +4,6 @@ import 'package:aplicaciones_foliares/reportes/trampas_reportes.dart';
 import 'package:flutter/material.dart';
 import '../constantes/tema.dart';
 import '../servicios/exportar_excel.dart';
-import '../servicios/exportar_pdf.dart';
 
 class MenuReportesScreen extends StatelessWidget {
   final int codProductor;
@@ -18,6 +17,9 @@ class MenuReportesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double anchoPantalla = MediaQuery.of(context).size.width;
+    final bool esDesktop = anchoPantalla >= 900;
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
       appBar: AppBar(
@@ -35,7 +37,7 @@ class MenuReportesScreen extends StatelessWidget {
               "Centro de Reportería",
               style: TextStyle(
                   fontWeight: FontWeight.w800,
-                  fontSize: 17,
+                  fontSize: 16.5,
                   color: AgroTheme.colorText),
             ),
             Text(
@@ -49,83 +51,137 @@ class MenuReportesScreen extends StatelessWidget {
         ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Documentación Oficial y Planillas",
-                style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: AgroTheme.colorText,
-                    letterSpacing: -0.4),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1150),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.symmetric(
+                horizontal: esDesktop ? 28 : 20,
+                vertical: 20,
               ),
-              const SizedBox(height: 4),
-              const Text(
-                "Informes consolidados, auditorías de campo y registros de labor.",
-                style: TextStyle(
-                    fontSize: 13,
-                    color: AgroTheme.colorTextSecondary,
-                    fontWeight: FontWeight.w500),
-              ),
-              const SizedBox(height: 20),
-
-              GridView.count(
-                crossAxisCount: MediaQuery.of(context).size.width > 600 ? 2 : 1,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                childAspectRatio:
-                    MediaQuery.of(context).size.width > 600 ? 1.6 : 2.3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildReporteCard(
-                    titulo: "Cuaderno de Campo",
-                    descripcion:
-                        "Historial agronómico consolidado exigido para certificaciones y BPA.",
-                    icono: Icons.menu_book_rounded,
-                    color: const Color(0xFF1E6B4C),
-                    onTap: () {
-                      CuadernoCampoScreen();
-                    },
+                  const Text(
+                    "Documentación Oficial y Planillas",
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      color: AgroTheme.colorText,
+                      letterSpacing: -0.4,
+                    ),
                   ),
-                  _buildReporteCard(
-                    titulo: "Reporte de Lecturas Trampas",
-                    descripcion:
-                        "Curva poblacional y capturas semanales de Carpocapsa y Grafolita.",
-                    icono: Icons.pest_control_outlined,
-                    color: AgroTheme.colorDanger,
-                    onTap: () {
-                      ReportesTrampasScreen();
-                    
-                    },
+                  const SizedBox(height: 4),
+                  const Text(
+                    "Informes consolidados, auditorías de campo y registros fitosanitarios.",
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AgroTheme.colorTextSecondary,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                  _buildReporteCard(
-                    titulo: "Reporte Fenológico",
-                    descripcion:
-                        "Evolución de estados vegetativos y temperaturas críticas registradas.",
-                    icono: Icons.eco_outlined,
-                    color: const Color(0xFFB8862A),
-                    onTap: () { Navigator.push(context,MaterialPageRoute(builder: (_) => const ReportesFenologiaScreen()),
-  
+                  const SizedBox(height: 20),
+
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      int columnas = 1;
+                      double aspect = 2.4;
+
+                      if (constraints.maxWidth >= 950) {
+                        columnas = 2;
+                        aspect = 2.3;
+                      } else if (constraints.maxWidth >= 650) {
+                        columnas = 2;
+                        aspect = 2.0;
+                      }
+
+                      return GridView.count(
+                        crossAxisCount: columnas,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisSpacing: 14,
+                        mainAxisSpacing: 14,
+                        childAspectRatio: aspect,
+                        children: [
+                          _buildReporteCard(
+                            titulo: "Cuaderno de Campo",
+                            descripcion:
+                                "Historial agronómico consolidado exigido para certificaciones y BPA.",
+                            etiqueta: "Oficial BPA",
+                            icono: Icons.menu_book_rounded,
+                            colorIcono: const Color(0xFF1E6B4C),
+                            fondoIcono: const Color(0xFFE8F5E9),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => CuadernoCampoScreen(
+                                    codProductor: codProductor,
+                                    nombreProductor: nombreProductor,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          _buildReporteCard(
+                            titulo: "Reporte de Trampeo",
+                            descripcion:
+                                "Curva poblacional y capturas semanales de Carpocapsa y Grafolita.",
+                            etiqueta: "Plagas",
+                            icono: Icons.pest_control_outlined,
+                            colorIcono: const Color(0xFFC62828),
+                            fondoIcono: const Color(0xFFFFEBEE),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ReportesTrampasScreen(
+                                    codProductor: codProductor,
+                                    nombreProductor: nombreProductor,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          _buildReporteCard(
+                            titulo: "Reporte Fenológico",
+                            descripcion:
+                                "Evolución de estados vegetativos, floración y cuaje por variedad.",
+                            etiqueta: "Curva Anual",
+                            icono: Icons.eco_outlined,
+                            colorIcono: const Color(0xFF8A6A1E),
+                            fondoIcono: const Color(0xFFFFF8E1),
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ReportesFenologiaScreen(
+                                    codProductor: codProductor,
+                                    nombreProductor: nombreProductor,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          _buildReporteCard(
+                            titulo: "Aplicaciones y Caldo",
+                            descripcion:
+                                "Planilla de recetas, caldo consumido por cuadro y carencias (.XLSX).",
+                            etiqueta: "Excel / Libro",
+                            icono: Icons.table_chart_outlined,
+                            colorIcono: const Color(0xFF1565C0),
+                            fondoIcono: const Color(0xFFE3F2FD),
+                            onTap: () {
+                              ServicioExportacionExcel.exportarRecetas();
+                            },
+                          ),
+                        ],
                       );
-                    },
-                  ),
-                  _buildReporteCard(
-                    titulo: "Aplicaciones Foliares",
-                    descripcion:
-                        "Planilla de recetas, caldo consumido por cuadro y carencias (.XLSX).",
-                    icono: Icons.table_chart_outlined,
-                    color: const Color(0xFF2563EB),
-                    onTap: () {
-                      ServicioExportacionExcel.exportarRecetas();
                     },
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -135,36 +191,39 @@ class MenuReportesScreen extends StatelessWidget {
   Widget _buildReporteCard({
     required String titulo,
     required String descripcion,
+    required String etiqueta,
     required IconData icono,
-    required Color color,
+    required Color colorIcono,
+    required Color fondoIcono,
     required VoidCallback onTap,
   }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
       child: Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AgroTheme.colorSurface,
           borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
           border: Border.all(color: AgroTheme.colorBorder),
-          boxShadow: [
+          boxShadow: const [
             BoxShadow(
-                color: const Color(0x04141E18),
-                blurRadius: 10,
-                offset: const Offset(0, 3)),
+              color: Color(0x03141E18),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
           ],
         ),
         child: Row(
           children: [
             Container(
-              width: 50,
-              height: 50,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
-                color: color.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(14),
+                color: fondoIcono,
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icono, color: color, size: 26),
+              child: Icon(icono, color: colorIcono, size: 24),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -172,26 +231,59 @@ class MenuReportesScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    titulo,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15.5,
-                        color: AgroTheme.colorText),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          titulo,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14.5,
+                            color: AgroTheme.colorText,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: fondoIcono,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          etiqueta,
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            color: colorIcono,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     descripcion,
                     style: const TextStyle(
-                        fontSize: 12,
-                        color: AgroTheme.colorTextSecondary,
-                        height: 1.3),
+                      fontSize: 11.5,
+                      color: AgroTheme.colorTextSecondary,
+                      height: 1.25,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios_rounded,
-                size: 14, color: AgroTheme.colorTextSecondary),
+            const SizedBox(width: 6),
+            const Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 14,
+              color: AgroTheme.colorTextSecondary,
+            ),
           ],
         ),
       ),

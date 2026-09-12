@@ -16,7 +16,7 @@ import '../constantes/tema.dart';
 import '../widgets/soft_button.dart';
 
 class ReportesTrampasScreen extends StatefulWidget {
-  const ReportesTrampasScreen({super.key});
+  const ReportesTrampasScreen({super.key, required int codProductor, required String nombreProductor});
 
   @override
   State<ReportesTrampasScreen> createState() => _ReportesTrampasScreenState();

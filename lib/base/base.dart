@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -7,7 +9,13 @@ class DatabaseHelper {
 
   DatabaseHelper._init();
 
-  Future<Database> get database async {
+  final supabase = Supabase.instance.client;
+
+  // ACA ES LO NUEVO: Retorna _WebDatabaseAdapter en Web o Database en móvil
+  Future<dynamic> get database async {
+    if (kIsWeb) {
+      return _WebDatabaseAdapter(supabase);
+    }
     if (_database != null) return _database!;
     _database = await _initDB('aplicaciones_foliares.db');
     return _database!;
@@ -56,17 +64,17 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-  CREATE TABLE IF NOT EXISTS parametros_aplic (
-    id INTEGER PRIMARY KEY,
-    vel_viento TEXT,
-    Temperatura TEXT,
-    Tamano_gota TEXT,
-    Vel_Aplicacion TEXT,
-    Caudal_Ha TEXT,
-    cod_receta INTEGER,
-    cod_orden INTEGER
-  )
-''');
+      CREATE TABLE IF NOT EXISTS parametros_aplic (
+        id INTEGER PRIMARY KEY,
+        vel_viento TEXT,
+        Temperatura TEXT,
+        Tamano_gota TEXT,
+        Vel_Aplicacion TEXT,
+        Caudal_Ha TEXT,
+        cod_receta INTEGER,
+        cod_orden INTEGER
+      )
+    ''');
 
     await db.execute('''
       CREATE TABLE recetas_aplicaciones (
@@ -91,6 +99,17 @@ class DatabaseHelper {
         ti TEXT,
         habilitado TEXT,
         sincronizado INTEGER DEFAULT 1
+      )
+    ''');
+
+     await db.execute('''
+      CREATE TABLE config_app_enlaces (
+      id integer INTEGER PRIMARY KEY AUTOINCREMENT,
+      plataforma text null,
+      url_instalacion text null,
+      version text null,
+      instrucciones text null,
+      sincronizado INTEGER DEFAULT 1
       )
     ''');
 
@@ -200,7 +219,6 @@ class DatabaseHelper {
       )
     ''');
 
-    // 💡 ACA ES LO NUEVO: Tablas de Monitoreo de Campo (Fenología y Trampas)
     await _crearTablasCampo(db);
   }
 
@@ -281,10 +299,178 @@ class DatabaseHelper {
     }
   }
 
+  // ESTO LO MODIFIQUE: Cálculo incremental compatible con Web y Móvil
   Future<int> obtenerSiguienteId(String tabla, String campoId) async {
+    if (kIsWeb) {
+      try {
+        final res = await supabase
+            .from(tabla)
+            .select(campoId)
+            .order(campoId, ascending: false)
+            .limit(1);
+
+        if (res.isNotEmpty) {
+          final valor = res.first[campoId];
+          final int maxId = int.tryParse(valor.toString()) ?? 0;
+          return maxId + 1;
+        }
+        return 1;
+      } catch (e) {
+        debugPrint("Error obteniendo siguiente ID en Web ($tabla): $e");
+        return 1;
+      }
+    }
+
     final db = await instance.database;
     final res = await db.rawQuery('SELECT MAX(CAST($campoId AS INTEGER)) as max_id FROM $tabla');
     int maxId = (res.first['max_id'] as int?) ?? 0;
     return maxId + 1;
+  }
+}
+
+// ============================================================================
+// ACA ES LO NUEVO: Adaptador Web transparente que intercepta y redirige a Supabase
+// ============================================================================
+class _WebDatabaseAdapter {
+  final SupabaseClient supabase;
+  _WebDatabaseAdapter(this.supabase);
+
+  Future<List<Map<String, dynamic>>> query(
+    String table, {
+    bool? distinct,
+    List<String>? columns,
+    String? where,
+    List<Object?>? whereArgs,
+    String? groupBy,
+    String? having,
+    String? orderBy,
+    int? limit,
+    int? offset,
+  }) async {
+    try {
+      dynamic builder = supabase.from(table).select();
+
+      if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
+        final columna = where.split('=').first.trim();
+        builder = builder.eq(columna, whereArgs.first);
+      }
+
+      if (orderBy != null) {
+        final partes = orderBy.split(' ');
+        final columna = partes[0].trim();
+        final ascendente = partes.length > 1 ? partes[1].toUpperCase() == 'ASC' : true;
+        builder = builder.order(columna, ascending: ascendente);
+      }
+
+      if (limit != null) {
+        builder = builder.limit(limit);
+      }
+
+      final res = await builder;
+      return List<Map<String, dynamic>>.from(res);
+    } catch (e) {
+      debugPrint("Error query Web en $table: $e");
+      return [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> rawQuery(String sql, [List<Object?>? arguments]) async {
+    try {
+      // Conteo de registros para widgets o contadores
+      if (sql.toUpperCase().contains('COUNT(*)')) {
+        return [{'t': 0}];
+      }
+
+      // SELECT MAX incremental
+      final sqlMayus = sql.toUpperCase();
+      if (sqlMayus.contains('SELECT MAX(') && sqlMayus.contains('FROM')) {
+        final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
+        if (partesFrom.length > 1) {
+          final tabla = partesFrom[1].trim().split(' ').first;
+          final regexCampo = RegExp(r'MAX\(CAST\((.*?) AS', caseSensitive: false);
+          final match = regexCampo.firstMatch(sql);
+
+          if (match != null) {
+            final campo = match.group(1)!.trim();
+            final res = await supabase
+                .from(tabla)
+                .select(campo)
+                .order(campo, ascending: false)
+                .limit(1);
+
+            if (res.isNotEmpty) {
+              final valor = res.first[campo];
+              return [{'max_id': int.tryParse(valor.toString()) ?? 0}];
+            }
+          }
+        }
+        return [{'max_id': 0}];
+      }
+
+      return [];
+    } catch (e) {
+      debugPrint("Error rawQuery Web: $e");
+      return [];
+    }
+  }
+
+  Future<int> insert(
+    String table,
+    Map<String, dynamic> values, {
+    String? nullColumnHack,
+    ConflictAlgorithm? conflictAlgorithm,
+  }) async {
+    try {
+      final payload = Map<String, dynamic>.from(values);
+      payload.remove('sincronizado');
+      await supabase.from(table).upsert(payload);
+      return 1;
+    } catch (e) {
+      debugPrint("Error insert Web en $table: $e");
+      return 0;
+    }
+  }
+
+  Future<int> update(
+    String table,
+    Map<String, dynamic> values, {
+    String? where,
+    List<Object?>? whereArgs,
+    ConflictAlgorithm? conflictAlgorithm,
+  }) async {
+    try {
+      final payload = Map<String, dynamic>.from(values);
+      payload.remove('sincronizado');
+
+      dynamic builder = supabase.from(table).update(payload);
+      if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
+        final columna = where.split('=').first.trim();
+        builder = builder.eq(columna, whereArgs.first);
+      }
+      await builder;
+      return 1;
+    } catch (e) {
+      debugPrint("Error update Web en $table: $e");
+      return 0;
+    }
+  }
+
+  Future<int> delete(
+    String table, {
+    String? where,
+    List<Object?>? whereArgs,
+  }) async {
+    try {
+      dynamic builder = supabase.from(table).delete();
+      if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
+        final columna = where.split('=').first.trim();
+        builder = builder.eq(columna, whereArgs.first);
+      }
+      await builder;
+      return 1;
+    } catch (e) {
+      debugPrint("Error delete Web en $table: $e");
+      return 0;
+    }
   }
 }

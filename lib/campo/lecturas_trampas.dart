@@ -179,6 +179,13 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
     }).toList();
   }
 
+  int get _trampasEnAlerta {
+    return _trampasFiltradas.where((t) {
+      final tot = int.tryParse(t['ultimo_total']?.toString() ?? '0') ?? 0;
+      return tot >= 5;
+    }).length;
+  }
+
   Future<void> _exportarExcelMatrizTrampas() async {
     if (_trampasFiltradas.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -436,7 +443,8 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                 final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
                                 final int total = m + hv + hg;
                                 final bool alertaUmbral = total >= 5;
-                                final String semNom = (l['semana'] ?? 'S/D').toString().replaceAll('Semana ', 'Sem ');
+                                final String semNom =
+                                    (l['semana'] ?? 'S/D').toString().replaceAll('Semana ', 'Sem ');
                                 final String? foto = l['url_evidencia']?.toString();
                                 final double ratio = (total / maxCaptura).clamp(0.08, 1.0);
 
@@ -1388,8 +1396,84 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            // KPI Bar: Total vs Alertas de Daño Económico
             Container(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
+              color: AgroTheme.colorSurface,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AgroTheme.colorBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AgroTheme.colorBorder),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.grid_view_rounded, size: 16, color: Color(0xFF1E6B4C)),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Instaladas",
+                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AgroTheme.colorTextSecondary)),
+                              Text("${_trampasFiltradas.length}",
+                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: _trampasEnAlerta > 0 ? const Color(0xFFFEF2F2) : AgroTheme.colorBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _trampasEnAlerta > 0 ? const Color(0xFFEF9A9A) : AgroTheme.colorBorder,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            size: 18,
+                            color: _trampasEnAlerta > 0 ? const Color(0xFFC62828) : Colors.grey,
+                          ),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("En Alerta (>=5)",
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: _trampasEnAlerta > 0 ? const Color(0xFFC62828) : AgroTheme.colorTextSecondary,
+                                  )),
+                              Text("$_trampasEnAlerta",
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                    color: _trampasEnAlerta > 0 ? const Color(0xFFC62828) : AgroTheme.colorText,
+                                  )),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Filtros de Chacra y Cuadro
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
               color: AgroTheme.colorSurface,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1404,7 +1488,7 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                         final ch = _chacrasDisponibles[i];
                         final isSel = _chacraSeleccionada == ch;
                         return ChoiceChip(
-                          label: Text(ch == "TODAS" ? "Todas" : "Ch. $ch"),
+                          label: Text(ch == "TODAS" ? "Todas las Chacras" : "Ch. $ch"),
                           selected: isSel,
                           selectedColor: const Color(0xFF1E6B4C),
                           labelStyle: TextStyle(
@@ -1457,6 +1541,8 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ],
               ),
             ),
+
+            // Buscador Rápido
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 6, 20, 4),
               child: Container(
@@ -1479,19 +1565,54 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                 ),
               ),
             ),
+
+            // Encabezado Fijo de Tabla
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFF1F8E9),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
+                ),
+                child: const Row(
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: Text("ESTACIÓN / TRAMPA",
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1B5E20))),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text("UBICACIÓN / CUADRO",
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1B5E20))),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text("ÚLTIMO RECUENTO",
+                          textAlign: TextAlign.right,
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF1B5E20))),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            // Listado de Trampas
             Expanded(
               child: _cargando
                   ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
                   : _trampasFiltradas.isEmpty
                       ? const Center(child: Text("No se encontraron trampas en este sector."))
                       : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 80),
                           itemCount: _trampasFiltradas.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
                           itemBuilder: (context, idx) {
                             final t = _trampasFiltradas[idx];
                             final ultimaSemana = t['ultima_semana'] ?? 'Sin lecturas';
-                            final ultimoTot = t['ultimo_total'] != null ? "${t['ultimo_total']} ind." : "0 ind.";
+                            final int totalInd = int.tryParse(t['ultimo_total']?.toString() ?? '0') ?? 0;
+                            final bool enAlerta = totalInd >= 5;
                             final String? fotoUrl = t['ultima_foto']?.toString();
 
                             return InkWell(
@@ -1502,7 +1623,10 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                 decoration: BoxDecoration(
                                   color: AgroTheme.colorSurface,
                                   borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
-                                  border: Border.all(color: AgroTheme.colorBorder),
+                                  border: Border.all(
+                                    color: enAlerta ? const Color(0xFFEF9A9A) : AgroTheme.colorBorder,
+                                    width: enAlerta ? 1.2 : 1.0,
+                                  ),
                                   boxShadow: const [
                                     BoxShadow(color: Color(0x04141E18), blurRadius: 6, offset: Offset(0, 2)),
                                   ],
@@ -1518,19 +1642,23 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                               decoration: BoxDecoration(
-                                                  color: const Color(0xFFE8F5E9),
-                                                  borderRadius: BorderRadius.circular(6)),
+                                                color: enAlerta ? const Color(0xFFC62828) : const Color(0xFFE8F5E9),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
                                               child: Text(
                                                 "TR #${t['trampa_numero']}",
-                                                style: const TextStyle(
-                                                    color: Color(0xFF2E7D32),
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 11),
+                                                style: TextStyle(
+                                                  color: enAlerta ? Colors.white : const Color(0xFF2E7D32),
+                                                  fontWeight: FontWeight.w800,
+                                                  fontSize: 11,
+                                                ),
                                               ),
                                             ),
                                             const SizedBox(width: 8),
-                                            Text("Chacra ${t['chacra']} · Cd. ${t['cuadro']}",
-                                                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                                            Text(
+                                              t['tipo_trampa'] ?? 'Plaga',
+                                              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                                            ),
                                           ],
                                         ),
                                         Row(
@@ -1543,29 +1671,41 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                             Container(
                                               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                                               decoration: BoxDecoration(
-                                                color: AgroTheme.colorBg,
+                                                color: enAlerta ? const Color(0xFFFFEBEE) : AgroTheme.colorBg,
                                                 borderRadius: BorderRadius.circular(8),
-                                                border: Border.all(color: AgroTheme.colorBorder),
+                                                border: Border.all(
+                                                  color: enAlerta ? const Color(0xFFEF9A9A) : AgroTheme.colorBorder,
+                                                ),
                                               ),
                                               child: Text(
-                                                "$ultimaSemana ($ultimoTot)",
-                                                style: const TextStyle(
-                                                    fontSize: 11, fontWeight: FontWeight.w700, color: AgroTheme.colorTextSecondary),
+                                                "$ultimaSemana: $totalInd ind.",
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: enAlerta ? const Color(0xFFC62828) : AgroTheme.colorTextSecondary,
+                                                ),
                                               ),
                                             ),
                                           ],
                                         ),
                                       ],
                                     ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      t['tipo_trampa'] ?? 'Plaga',
-                                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5, color: AgroTheme.colorText),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      "Fila: ${t['fila']} · ${t['cultivo']} (${t['variedad']})",
-                                      style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                                      decoration: BoxDecoration(
+                                        color: AgroTheme.colorBg,
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text("Chacra ${t['chacra']} · Cd. ${t['cuadro']}",
+                                              style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700)),
+                                          Text("Fila ${t['fila']} · ${t['variedad']}",
+                                              style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary)),
+                                        ],
+                                      ),
                                     ),
                                     const SizedBox(height: 10),
                                     Row(
@@ -1573,15 +1713,15 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                         Expanded(
                                           flex: 3,
                                           child: SizedBox(
-                                            height: 38,
+                                            height: 36,
                                             child: SoftButton(
-                                              borderRadius: 10,
+                                              borderRadius: 8,
                                               onTap: () => _abrirModalLecturaDirecta(t),
-                                              child: Row(
+                                              child: const Row(
                                                 mainAxisAlignment: MainAxisAlignment.center,
-                                                children: const [
-                                                  Icon(Icons.edit_note_rounded, color: Colors.white, size: 17),
-                                                  SizedBox(width: 6),
+                                                children: [
+                                                  Icon(Icons.edit_note_rounded, color: Colors.white, size: 16),
+                                                  SizedBox(width: 5),
                                                   Text("Registrar",
                                                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
                                                 ],
@@ -1593,15 +1733,15 @@ class _LecturasTrampasScreenState extends State<LecturasTrampasScreen> {
                                         Expanded(
                                           flex: 2,
                                           child: SizedBox(
-                                            height: 38,
+                                            height: 36,
                                             child: SoftButton(
                                               isSecondary: true,
-                                              borderRadius: 10,
+                                              borderRadius: 8,
                                               onTap: () => _mostrarReporteSemanas(t),
-                                              child: Row(
+                                              child: const Row(
                                                 mainAxisAlignment: MainAxisAlignment.center,
-                                                children: const [
-                                                  Icon(Icons.show_chart_rounded, color: Color(0xFF1E6B4C), size: 16),
+                                                children: [
+                                                  Icon(Icons.show_chart_rounded, color: Color(0xFF1E6B4C), size: 15),
                                                   SizedBox(width: 4),
                                                   Text("Curva",
                                                       style: TextStyle(color: Color(0xFF1E6B4C), fontWeight: FontWeight.w800, fontSize: 12)),
