@@ -104,7 +104,7 @@ class DatabaseHelper {
 
      await db.execute('''
       CREATE TABLE config_app_enlaces (
-      id integer INTEGER PRIMARY KEY AUTOINCREMENT,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       plataforma text null,
       url_instalacion text null,
       version text null,
