@@ -399,7 +399,6 @@ class _WebDatabaseAdapter {
   final SupabaseClient supabase;
   _WebDatabaseAdapter(this.supabase);
 
-  // 💡 ACA ES LO NUEVO: Implementación de batch para Flutter Web
   _WebBatchAdapter batch() => _WebBatchAdapter(this);
 
   Future<List<Map<String, dynamic>>> query(
@@ -414,7 +413,6 @@ class _WebDatabaseAdapter {
     int? limit,
     int? offset,
   }) async {
-    // ... resto del método existente ...
     try {
       dynamic builder = supabase.from(table).select();
 
@@ -435,47 +433,14 @@ class _WebDatabaseAdapter {
       }
 
       final res = await builder;
-      return List<Map<String, dynamic>>.from(res);
+      if (res is List) {
+        return List<Map<String, dynamic>>.from(
+          res.map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+      }
+      return [];
     } catch (e) {
       debugPrint("Error query Web en $table: $e");
-      return [];
-    }
-  }
-
-  Future<List<Map<String, dynamic>>> rawQuery(String sql, [List<Object?>? arguments]) async {
-    try {
-      if (sql.toUpperCase().contains('COUNT(*)')) {
-        return [{'t': 0}];
-      }
-
-      final sqlMayus = sql.toUpperCase();
-      if (sqlMayus.contains('SELECT MAX(') && sqlMayus.contains('FROM')) {
-        final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
-        if (partesFrom.length > 1) {
-          final tabla = partesFrom[1].trim().split(' ').first;
-          final regexCampo = RegExp(r'MAX\(CAST\((.*?) AS', caseSensitive: false);
-          final match = regexCampo.firstMatch(sql);
-
-          if (match != null) {
-            final campo = match.group(1)!.trim();
-            final res = await supabase
-                .from(tabla)
-                .select(campo)
-                .order(campo, ascending: false)
-                .limit(1);
-
-            if (res.isNotEmpty) {
-              final valor = res.first[campo];
-              return [{'max_id': int.tryParse(valor.toString()) ?? 0}];
-            }
-          }
-        }
-        return [{'max_id': 0}];
-      }
-
-      return [];
-    } catch (e) {
-      debugPrint("Error rawQuery Web: $e");
       return [];
     }
   }
@@ -489,6 +454,7 @@ class _WebDatabaseAdapter {
     try {
       final payload = Map<String, dynamic>.from(values);
       payload.remove('sincronizado');
+      // 💡 Asegurar pasar el Map encapsulado o como objeto plano
       await supabase.from(table).upsert(payload);
       return 1;
     } catch (e) {
@@ -537,6 +503,44 @@ class _WebDatabaseAdapter {
     } catch (e) {
       debugPrint("Error delete Web en $table: $e");
       return 0;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> rawQuery(String sql, [List<Object?>? arguments]) async {
+    try {
+      if (sql.toUpperCase().contains('COUNT(*)')) {
+        return [{'total': 0, 'count': 0, 't': 0}];
+      }
+
+      final sqlMayus = sql.toUpperCase();
+      if (sqlMayus.contains('SELECT MAX(') && sqlMayus.contains('FROM')) {
+        final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
+        if (partesFrom.length > 1) {
+          final tabla = partesFrom[1].trim().split(' ').first;
+          final regexCampo = RegExp(r'MAX\(CAST\((.*?) AS', caseSensitive: false);
+          final match = regexCampo.firstMatch(sql);
+
+          if (match != null) {
+            final campo = match.group(1)!.trim();
+            final res = await supabase
+                .from(tabla)
+                .select(campo)
+                .order(campo, ascending: false)
+                .limit(1);
+
+            if (res is List && res.isNotEmpty) {
+              final valor = res.first[campo];
+              return [{'max_id': int.tryParse(valor.toString()) ?? 0, 'max_cr': int.tryParse(valor.toString()) ?? 0}];
+            }
+          }
+        }
+        return [{'max_id': 0, 'max_cr': 0}];
+      }
+
+      return [];
+    } catch (e) {
+      debugPrint("Error rawQuery Web: $e");
+      return [];
     }
   }
 }

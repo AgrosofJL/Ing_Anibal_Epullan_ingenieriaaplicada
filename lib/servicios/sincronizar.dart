@@ -13,15 +13,20 @@ class ServicioSincronizacion {
     estaSincronizando.value = true;
 
     try {
-      // 💡 ACA ES LO NUEVO: 1. Sube imágenes a los buckets y actualiza SQLite con URL pública
+      if (kIsWeb) {
+        estadoMensaje.value = 'Verificando licencia...';
+        await ServicioBajar.verificarLicencia();
+        estadoMensaje.value = 'Conectado a la nube';
+        return;
+      }
+
+      // En Android / iOS / Windows Desktop (SQLite Local):
       estadoMensaje.value = 'Subiendo fotos y evidencias...';
       await ServicioEvidencias.sincronizarFotosPendientes();
 
-      // 2. Sube los registros de tablas modificadas (ahora con la URL pública de la foto)
       estadoMensaje.value = 'Subiendo modificaciones...';
       await ServicioSubir.subirModificados();
 
-      // 3. Baja por bloques paginados
       estadoMensaje.value = 'Descargando datos...';
       await ServicioBajar.bajarIncremental();
 
