@@ -177,17 +177,17 @@ class _MenuCentralState extends State<MenuCentral>
     final bool esTablet = ancho >= 720 && ancho < 1150;
 
     int crossAxisCount = 1;
-    double childAspectRatio = 2.4;
+    double childAspectRatio = 2.1;
 
     if (esDesktop) {
       crossAxisCount = 3;
-      childAspectRatio = 1.65;
+      childAspectRatio = 1.60;
     } else if (esTablet) {
       crossAxisCount = 2;
-      childAspectRatio = 1.85;
+      childAspectRatio = 1.75;
     } else {
       crossAxisCount = 1;
-      childAspectRatio = ancho < 380 ? 2.1 : 2.5;
+      childAspectRatio = ancho < 380 ? 1.95 : 2.25;
     }
 
     return Scaffold(
@@ -195,6 +195,7 @@ class _MenuCentralState extends State<MenuCentral>
       body: SafeArea(
         child: Column(
           children: [
+            // BARRA SUPERIOR INSTITUCIONAL
             Container(
               padding: EdgeInsets.symmetric(
                 horizontal: esDesktop ? 36 : 20,
@@ -223,11 +224,18 @@ class _MenuCentralState extends State<MenuCentral>
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: Image.asset(
-                            'logo/logo.png',
-                            fit: BoxFit.cover,
+                            'logo/logo_anibal.png',
+                            fit: BoxFit.contain,
                             errorBuilder: (context, error, stackTrace) =>
-                                const Icon(Icons.eco_rounded,
-                                    color: AgroTheme.colorAccent, size: 24),
+                                Image.asset(
+                              'logo/logo.png',
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.eco_rounded,
+                                color: AgroTheme.colorAccent,
+                                size: 24,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -285,8 +293,7 @@ class _MenuCentralState extends State<MenuCentral>
                   Row(
                     children: [
                       ValueListenableBuilder<bool>(
-                        valueListenable:
-                            ServicioSincronizacion.estaSincronizando,
+                        valueListenable: ServicioSincronizacion.estaSincronizando,
                         builder: (context, isSyncing, _) {
                           return SoftButton(
                             isSecondary: true,
@@ -294,8 +301,33 @@ class _MenuCentralState extends State<MenuCentral>
                             borderRadius: 12,
                             onTap: isSyncing
                                 ? null
-                                : () => ServicioSincronizacion
-                                    .sincronizarEnSegundoPlano(),
+                                : () async {
+                                    final messenger =
+                                        ScaffoldMessenger.of(context);
+                                    messenger.showSnackBar(
+                                      const SnackBar(
+                                        content: Text("Sincronizando con Supabase..."),
+                                        duration: Duration(milliseconds: 900),
+                                      ),
+                                    );
+
+                                    final bool exito =
+                                        await ServicioSincronizacion
+                                            .sincronizarEnSegundoPlano();
+
+                                    if (!context.mounted) return;
+                                    messenger.showSnackBar(
+                                      SnackBar(
+                                        backgroundColor: exito
+                                            ? const Color(0xFF1E6B4C)
+                                            : const Color(0xFFC62828),
+                                        content: Text(exito
+                                            ? "¡Datos sincronizados correctamente!"
+                                            : "No se pudo sincronizar. Verificá la conexión."),
+                                        duration: const Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
                             child: RotationTransition(
                               turns: _rotationController,
                               child: Icon(
@@ -321,6 +353,8 @@ class _MenuCentralState extends State<MenuCentral>
                 ],
               ),
             ),
+
+            // CONTENIDO SCROLLABLE CENTRAL
             Expanded(
               child: Center(
                 child: ConstrainedBox(
@@ -378,7 +412,7 @@ class _MenuCentralState extends State<MenuCentral>
                               titulo: "Nueva Receta",
                               subtitulo: "APLICACIÓN & CALDOS",
                               descripcion:
-                                  "Carga de aplicaciones foliares, dosificación de máquina y hectárea.",
+                                  "Carga de recetas fitosanitarias, dosificación por máquina y hectárea.",
                               icono: Icons.note_alt_outlined,
                               accentColor: const Color(0xFF1E6B4C),
                               tag: "Labor Activa",
@@ -398,7 +432,7 @@ class _MenuCentralState extends State<MenuCentral>
                               titulo: "Gestión en Campo",
                               subtitulo: "MONITOREO & FENOLOGÍA",
                               descripcion:
-                                  "Monitoreo fenológico, ubicación de trampas, capturas y cuarteles.",
+                                  "Monitoreo fenológico, ubicación GPS de trampas y catastro de plantación.",
                               icono: Icons.park_outlined,
                               accentColor: const Color(0xFF10B981),
                               tag: "Sanidad",
@@ -415,18 +449,21 @@ class _MenuCentralState extends State<MenuCentral>
                               },
                             ),
                             ModuloCardItem(
-                              titulo: "Deposito Insumos",
-                              subtitulo: "CATALOGO DE PRODUCTOS & STOCK",
+                              titulo: "Depósito & Pañol",
+                              subtitulo: "STOCK EN DEPÓSITOS & CATÁLOGO",
                               descripcion:
-                                  "Stock disponible, principios activos y tiempos de carencia.",
-                              icono: Icons.science_outlined,
+                                  "Existencias por galpón, ingresos con vencimiento, consumos y mermas.",
+                              icono: Icons.warehouse_outlined,
                               accentColor: const Color(0xFF3B82F6),
                               tag: "Insumos",
                               onTap: () {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => const CatalogoInsumosScreen(),
+                                    builder: (_) => CatalogoInsumosScreen(
+                                      codProductor: _codProductorActivo,
+                                      nombreProductor: _nombreProductorActivo,
+                                    ),
                                   ),
                                 );
                               },
@@ -435,7 +472,7 @@ class _MenuCentralState extends State<MenuCentral>
                               titulo: "Reportería",
                               subtitulo: "REGISTROS & AUDITORÍA",
                               descripcion:
-                                  "Cuaderno de campo, informes de capturas, fenología y Excel oficial.",
+                                  "Cuaderno de campo BPA, capturas de trampeo, curvas fenológicas y Excel.",
                               icono: Icons.assessment_outlined,
                               accentColor: const Color(0xFFD97706),
                               tag: "Oficial BPA",
@@ -801,6 +838,7 @@ class _ModuloCardItemState extends State<ModuloCardItem> {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [

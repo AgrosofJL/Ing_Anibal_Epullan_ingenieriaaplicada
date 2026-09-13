@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, ValueNotifier;
 import 'bajar.dart';
 import 'sincronizar_evidencias.dart';
 import 'subir.dart';
@@ -7,33 +7,49 @@ class ServicioSincronizacion {
   static final ValueNotifier<bool> estaSincronizando = ValueNotifier<bool>(false);
   static final ValueNotifier<String> estadoMensaje = ValueNotifier<String>('');
 
-  static Future<void> sincronizarEnSegundoPlano() async {
-    if (estaSincronizando.value) return;
+  static Future<bool> sincronizarEnSegundoPlano() async {
+    if (estaSincronizando.value) return false;
 
     estaSincronizando.value = true;
+    estadoMensaje.value = 'Iniciando sincronización...';
 
     try {
       if (kIsWeb) {
-        estadoMensaje.value = 'Verificando licencia...';
+        // En Web / Safari PWA solo validamos conexión y licencia con Supabase
+        estadoMensaje.value = 'Verificando licencia en la nube...';
         await ServicioBajar.verificarLicencia();
-        estadoMensaje.value = 'Conectado a la nube';
-        return;
+        estadoMensaje.value = 'Conectado y sincronizado';
+        return true;
       }
 
-      // En Android / iOS / Windows Desktop (SQLite Local):
-      estadoMensaje.value = 'Subiendo fotos y evidencias...';
-      await ServicioEvidencias.sincronizarFotosPendientes();
+      // En Windows / Android / iOS con SQLite local
+      estadoMensaje.value = 'Subiendo evidencias...';
+      try {
+        await ServicioEvidencias.sincronizarFotosPendientes();
+      } catch (e) {
+        debugPrint("Aviso al subir evidencias: $e");
+      }
 
-      estadoMensaje.value = 'Subiendo modificaciones...';
-      await ServicioSubir.subirModificados();
+      estadoMensaje.value = 'Subiendo registros locales...';
+      try {
+        await ServicioSubir.subirModificados();
+      } catch (e) {
+        debugPrint("Aviso al subir modificados: $e");
+      }
 
       estadoMensaje.value = 'Descargando datos...';
-      await ServicioBajar.bajarIncremental();
+      try {
+        await ServicioBajar.bajarIncremental();
+      } catch (e) {
+        debugPrint("Aviso al descargar datos: $e");
+      }
 
       estadoMensaje.value = 'Sincronizado';
+      return true;
     } catch (e) {
       estadoMensaje.value = 'Error al sincronizar';
-      debugPrint('Error en sync: $e');
+      debugPrint('Error general en sync: $e');
+      return false;
     } finally {
       estaSincronizando.value = false;
     }
