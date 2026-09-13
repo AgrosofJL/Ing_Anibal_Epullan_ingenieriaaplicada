@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint, ValueNotifier;
+import 'package:flutter/foundation.dart' show debugPrint, ValueNotifier;
 import 'bajar.dart';
 import 'sincronizar_evidencias.dart';
 import 'subir.dart';
@@ -6,6 +6,7 @@ import 'subir.dart';
 class ServicioSincronizacion {
   static final ValueNotifier<bool> estaSincronizando = ValueNotifier<bool>(false);
   static final ValueNotifier<String> estadoMensaje = ValueNotifier<String>('');
+  static final ValueNotifier<int> versionMenuNotifier = ValueNotifier<int>(0);
 
   static Future<bool> sincronizarEnSegundoPlano() async {
     if (estaSincronizando.value) return false;
@@ -14,22 +15,7 @@ class ServicioSincronizacion {
     estadoMensaje.value = 'Iniciando sincronización...';
 
     try {
-      if (kIsWeb) {
-        // En Web / Safari PWA solo validamos conexión y licencia con Supabase
-        estadoMensaje.value = 'Verificando licencia en la nube...';
-        await ServicioBajar.verificarLicencia();
-        estadoMensaje.value = 'Conectado y sincronizado';
-        return true;
-      }
-
-      // En Windows / Android / iOS con SQLite local
-      estadoMensaje.value = 'Subiendo evidencias...';
-      try {
-        await ServicioEvidencias.sincronizarFotosPendientes();
-      } catch (e) {
-        debugPrint("Aviso al subir evidencias: $e");
-      }
-
+      // 1. Subir modificaciones pendientes (compatible con Web y móvil)
       estadoMensaje.value = 'Subiendo registros locales...';
       try {
         await ServicioSubir.subirModificados();
@@ -37,15 +23,20 @@ class ServicioSincronizacion {
         debugPrint("Aviso al subir modificados: $e");
       }
 
+      // 2. Descargar y actualizar datos locales de forma diferencial
       estadoMensaje.value = 'Descargando datos...';
-      try {
-        await ServicioBajar.bajarIncremental();
-      } catch (e) {
-        debugPrint("Aviso al descargar datos: $e");
+      final bool rolCambio = await ServicioBajar.bajarIncremental();
+
+      if (rolCambio) {
+        versionMenuNotifier.value++;
       }
 
       estadoMensaje.value = 'Sincronizado';
       return true;
+    } on LicenciaInactivaException catch (lie) {
+      estadoMensaje.value = 'Usuario Inactivo';
+      debugPrint("Bloqueo aplicado: $lie");
+      return false;
     } catch (e) {
       estadoMensaje.value = 'Error al sincronizar';
       debugPrint('Error general en sync: $e');

@@ -121,10 +121,11 @@ class ServicioBajar {
   }
 
   // 💡 2. Descarga diferencial verificando diferencias con lo de arriba
+  // 💡 Descarga diferencial para TODAS las plataformas (incluyendo Web con SQLite local)
   static Future<bool> bajarIncremental({BuildContext? context}) async {
     final bool rolCambio = await verificarLicencia(context: context);
 
-    if (kIsWeb) return rolCambio;
+    // ❌ ELIMINADO: if (kIsWeb) return rolCambio; -> Ahora la Web sí baja los datos a IndexedDB
 
     final client = SupabaseService.client;
     final db = await DatabaseHelper.instance.database;
