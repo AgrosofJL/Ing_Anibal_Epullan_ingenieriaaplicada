@@ -332,7 +332,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
     final List<Map<String, dynamic>> insumosConStock = [];
     for (var prod in resInsumos) {
-      final int idIns = (prod['ID_Insumos'] is int)
+      final Object? idIns = (prod['ID_Insumos'] is int)
           ? prod['ID_Insumos']
           : int.tryParse(prod['ID_Insumos']?.toString() ?? '0') ?? 0;
       final double stockDisponible = stockPorInsumo[idIns] ?? 0.0;
