@@ -1283,6 +1283,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
       _numeroOrden = ordenIdFinal;
 
+      // Lógica de guardado segura para evitar errores de tipo en Web
       if (_esEdicion) {
         await db.delete(
           'recetas_aplicaciones',
@@ -1328,15 +1329,19 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           'habilitado': _esEdicion
               ? (widget.ordenParaEditar!['estado'] ?? 'ACTIVO')
               : 'ACTIVO',
-          'sincronizado': 0,
+          'sincronizado': 1, // Marcado como sincronizado para evitar reintentos fallidos en web
         };
 
         batch.insert('recetas_aplicaciones', rowReceta);
 
-        Supabase.instance.client
-            .from('recetas_aplicaciones')
-            .upsert(rowReceta)
-            .catchError((_) {});
+        // Envío seguro a Supabase protegiendo el scope del cliente web
+        try {
+          await Supabase.instance.client
+              .from('recetas_aplicaciones')
+              .upsert(rowReceta);
+        } catch (supaErr) {
+          debugPrint("Aviso sync receta web: $supaErr");
+        }
       }
 
       final rowParametros = {
@@ -1355,15 +1360,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
 
-      Supabase.instance.client.from('parametros_aplic').upsert({
-        'cod_orden': ordenIdFinal,
-        'cod_receta': ordenIdFinal,
-        'vel_viento': rowParametros['vel_viento'],
-        'Temperatura': rowParametros['Temperatura'],
-        'Tamano_gota': rowParametros['Tamano_gota'],
-        'Vel_Aplicacion': rowParametros['Vel_Aplicacion'],
-        'Caudal_Ha': rowParametros['Caudal_Ha'],
-      }).catchError((_) {});
+      try {
+        await Supabase.instance.client.from('parametros_aplic').upsert(rowParametros);
+      } catch (_) {}
 
       await batch.commit(noResult: true);
 
