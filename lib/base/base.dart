@@ -614,6 +614,9 @@ class _WebDatabaseAdapter {
 // ============================================================================
 // ADAPTADOR BATCH SEGURO PARA WEB
 // ============================================================================
+// ============================================================================
+// ADAPTADOR BATCH SEGURO PARA WEB
+// ============================================================================
 class _WebBatchAdapter {
   final _WebDatabaseAdapter _dbAdapter;
   final List<Future<dynamic> Function()> _operaciones = [];
@@ -676,7 +679,7 @@ class _WebBatchAdapter {
       try {
         final res = await op();
         if (noResult != true) {
-          resultados.add(res);
+          resultados.add(res); // 💡 Usar .add() en lugar de .push()
         }
       } catch (e) {
         if (continueOnError != true) rethrow;
