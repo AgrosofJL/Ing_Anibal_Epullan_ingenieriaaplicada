@@ -440,7 +440,16 @@ class _WebDatabaseAdapter {
 
       if (orderBy != null) {
         final partes = orderBy.split(' ');
-        final columna = partes[0].trim();
+        String columna = partes[0].trim();
+
+        // 💡 Limpiar expresiones tipo CAST(columna AS INTEGER) para PostgREST
+        if (columna.toUpperCase().startsWith('CAST(')) {
+          final match = RegExp(r'CAST\(\s*([a-zA-Z0-9_]+)', caseSensitive: false).firstMatch(columna);
+          if (match != null) {
+            columna = match.group(1)!.trim();
+          }
+        }
+
         final ascendente = partes.length > 1 ? partes[1].toUpperCase() == 'ASC' : true;
         builder = builder.order(columna, ascending: ascendente);
       }

@@ -387,11 +387,18 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       columns: ['cuadro', 'ha', 'variedad', 'cultivo'],
       where: 'cod_productor = ? AND chacra = ?',
       whereArgs: [widget.codProductor, chacra],
-      orderBy: 'CAST(cuadro AS INTEGER) ASC',
+      orderBy: 'cuadro ASC', // 💡 En lugar de 'CAST(cuadro AS INTEGER) ASC'
     );
 
+    // Ordenamiento numérico en memoria (Dart) para garantizar el orden correcto sin que falle la API
+    final listaOrdenada = List<Map<String, dynamic>>.from(res)..sort((a, b) {
+      final int na = int.tryParse(a['cuadro']?.toString().replaceAll(RegExp(r'[^0-9]'), '') ?? '0') ?? 0;
+      final int nb = int.tryParse(b['cuadro']?.toString().replaceAll(RegExp(r'[^0-9]'), '') ?? '0') ?? 0;
+      return na.compareTo(nb);
+    });
+
     final Set<String> cultivos = {};
-    for (var c in res) {
+    for (var c in listaOrdenada) {
       final cul = c['cultivo']?.toString().trim();
       if (cul != null && cul.isNotEmpty) {
         cultivos.add(cul);
@@ -399,7 +406,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     }
 
     setState(() {
-      _todosCuadrosInventario = res;
+      _todosCuadrosInventario = listaOrdenada;
       _cultivosEnChacra = cultivos;
       _cultivosFiltroActivos.clear();
       _cultivosFiltroActivos.addAll(cultivos);
