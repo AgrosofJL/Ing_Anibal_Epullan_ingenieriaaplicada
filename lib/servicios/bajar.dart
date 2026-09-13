@@ -180,6 +180,7 @@ class ServicioBajar {
         Batch batch = db.batch();
         int insercionesEnLote = 0;
 
+
         for (var row in dataRemota) {
           final Map<String, dynamic> filaArriba = Map<String, dynamic>.from(row as Map);
 
@@ -216,7 +217,7 @@ class ServicioBajar {
           bool huboCambio = false;
 
           if (registrosAbajo.isEmpty) {
-            huboCambio = true;
+            huboCambio = true; // Si no existe localmente, se inserta sí o sí
           } else {
             final Map<String, dynamic> filaAbajo = registrosAbajo.first;
 
@@ -239,6 +240,7 @@ class ServicioBajar {
             }
           }
 
+          // 💡 Si hay cambios O si la tabla local estaba completamente vacía, guardamos en lote
           if (huboCambio) {
             batch.insert(
               tabla,
