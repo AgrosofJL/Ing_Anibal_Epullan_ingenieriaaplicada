@@ -399,6 +399,9 @@ class _WebDatabaseAdapter {
   final SupabaseClient supabase;
   _WebDatabaseAdapter(this.supabase);
 
+  // 💡 ACA ES LO NUEVO: Implementación de batch para Flutter Web
+  _WebBatchAdapter batch() => _WebBatchAdapter(this);
+
   Future<List<Map<String, dynamic>>> query(
     String table, {
     bool? distinct,
@@ -411,6 +414,7 @@ class _WebDatabaseAdapter {
     int? limit,
     int? offset,
   }) async {
+    // ... resto del método existente ...
     try {
       dynamic builder = supabase.from(table).select();
 
@@ -534,5 +538,79 @@ class _WebDatabaseAdapter {
       debugPrint("Error delete Web en $table: $e");
       return 0;
     }
+  }
+}
+// ============================================================================
+// ACA ES LO NUEVO: Adaptador Batch para Flutter Web (Emula sqflite Batch)
+// ============================================================================
+class _WebBatchAdapter {
+  final _WebDatabaseAdapter _dbAdapter;
+  final List<Future<dynamic> Function()> _operaciones = [];
+
+  _WebBatchAdapter(this._dbAdapter);
+
+  void insert(
+    String table,
+    Map<String, dynamic> values, {
+    String? nullColumnHack,
+    ConflictAlgorithm? conflictAlgorithm,
+  }) {
+    _operaciones.add(() => _dbAdapter.insert(
+          table,
+          values,
+          nullColumnHack: nullColumnHack,
+          conflictAlgorithm: conflictAlgorithm,
+        ));
+  }
+
+  void update(
+    String table,
+    Map<String, dynamic> values, {
+    String? where,
+    List<Object?>? whereArgs,
+    ConflictAlgorithm? conflictAlgorithm,
+  }) {
+    _operaciones.add(() => _dbAdapter.update(
+          table,
+          values,
+          where: where,
+          whereArgs: whereArgs,
+          conflictAlgorithm: conflictAlgorithm,
+        ));
+  }
+
+  void delete(
+    String table, {
+    String? where,
+    List<Object?>? whereArgs,
+  }) {
+    _operaciones.add(() => _dbAdapter.delete(
+          table,
+          where: where,
+          whereArgs: whereArgs,
+        ));
+  }
+
+  void rawInsert(String sql, [List<Object?>? arguments]) {
+    _operaciones.add(() => _dbAdapter.rawQuery(sql, arguments));
+  }
+
+  Future<List<dynamic>> commit({
+    bool? exclusive,
+    bool? noResult,
+    bool? continueOnError,
+  }) async {
+    final List<dynamic> resultados = [];
+    for (final op in _operaciones) {
+      try {
+        final res = await op();
+        if (noResult != true) {
+          resultados.add(res);
+        }
+      } catch (e) {
+        if (continueOnError != true) rethrow;
+      }
+    }
+    return resultados;
   }
 }
