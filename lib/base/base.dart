@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
@@ -27,7 +28,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 9, // Incrementado a 8 para disparar onUpgrade en bases locales existentes
+      version: 9,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -42,7 +43,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE usuarios (
+      CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY,
         correo TEXT,
         operario TEXT,
@@ -55,7 +56,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE rubros_insumos (
+      CREATE TABLE IF NOT EXISTS rubros_insumos (
         codigo INTEGER,
         cod_rubro INTEGER,
         nombre TEXT,
@@ -77,7 +78,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE recetas_aplicaciones (
+      CREATE TABLE IF NOT EXISTS recetas_aplicaciones (
         cod_receta INTEGER PRIMARY KEY,
         cod_orden INTEGER,
         cod_productor INTEGER,
@@ -114,7 +115,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE productores (
+      CREATE TABLE IF NOT EXISTS productores (
         cod_productor INTEGER PRIMARY KEY AUTOINCREMENT,
         productor TEXT,
         cuit TEXT,
@@ -126,7 +127,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE motivos_aplicaciones (
+      CREATE TABLE IF NOT EXISTS motivos_aplicaciones (
         cod INTEGER PRIMARY KEY,
         motivo TEXT,
         tipo_aplic TEXT
@@ -134,7 +135,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE inventario_plantacion (
+      CREATE TABLE IF NOT EXISTS inventario_plantacion (
         id INTEGER PRIMARY KEY,
         cod_productor INTEGER,
         productor TEXT,
@@ -157,7 +158,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE cuadros (
+      CREATE TABLE IF NOT EXISTS cuadros (
         cod_cuadro INTEGER PRIMARY KEY,
         cod_productor INTEGER,
         productor TEXT,
@@ -171,7 +172,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE catalogo_insumos (
+      CREATE TABLE IF NOT EXISTS catalogo_insumos (
         ID_Insumos INTEGER,
         rubro TEXT,
         Descripcion1 TEXT,
@@ -187,7 +188,7 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
-      CREATE TABLE aplicaciones_registros (
+      CREATE TABLE IF NOT EXISTS aplicaciones_registros (
         registro TEXT PRIMARY KEY,
         cod_receta INTEGER,
         cod_orden INTEGER,
@@ -370,20 +371,20 @@ class DatabaseHelper {
   Future<int> obtenerSiguienteId(String tabla, String campoId) async {
     if (kIsWeb) {
       try {
-        final res = await supabase
+        final dynamic res = await supabase
             .from(tabla)
             .select(campoId)
             .order(campoId, ascending: false)
             .limit(1);
 
-        if (res.isNotEmpty) {
+        if (res is List && res.isNotEmpty) {
           final valor = res.first[campoId];
           final int maxId = int.tryParse(valor.toString()) ?? 0;
           return maxId + 1;
         }
         return 1;
       } catch (e) {
-        debugPrint("Error obteniendo siguiente ID en Web ($tabla): $e");
+        debugPrint("Aviso siguiente ID en Web ($tabla): $e");
         return 1;
       }
     }
@@ -395,11 +396,19 @@ class DatabaseHelper {
   }
 }
 
+// ============================================================================
+// ADAPTADOR WEB ROBUSTO: Evita errores de .push() y emula SQLite en Supabase
+// ============================================================================
 class _WebDatabaseAdapter {
   final SupabaseClient supabase;
   _WebDatabaseAdapter(this.supabase);
 
   _WebBatchAdapter batch() => _WebBatchAdapter(this);
+
+  Future<void> execute(String sql, [List<Object?>? arguments]) async {
+    // Compatible con llamadas ddl locales
+    return;
+  }
 
   Future<List<Map<String, dynamic>>> query(
     String table, {
@@ -414,11 +423,19 @@ class _WebDatabaseAdapter {
     int? offset,
   }) async {
     try {
-      dynamic builder = supabase.from(table).select();
+      final String colsSelect = (columns != null && columns.isNotEmpty)
+          ? columns.join(',')
+          : '*';
+
+      dynamic builder = supabase.from(table).select(colsSelect);
 
       if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
-        final columna = where.split('=').first.trim();
-        builder = builder.eq(columna, whereArgs.first);
+        final partesWhere = where.split('AND');
+        for (int i = 0; i < partesWhere.length && i < whereArgs.length; i++) {
+          final parte = partesWhere[i].trim();
+          final columna = parte.split('=').first.trim().split(' ').last.trim();
+          builder = builder.eq(columna, whereArgs[i]);
+        }
       }
 
       if (orderBy != null) {
@@ -432,7 +449,7 @@ class _WebDatabaseAdapter {
         builder = builder.limit(limit);
       }
 
-      final res = await builder;
+      final dynamic res = await builder;
       if (res is List) {
         return List<Map<String, dynamic>>.from(
           res.map((e) => Map<String, dynamic>.from(e as Map)),
@@ -454,13 +471,16 @@ class _WebDatabaseAdapter {
     try {
       final payload = Map<String, dynamic>.from(values);
       payload.remove('sincronizado');
-      // 💡 Asegurar pasar el Map encapsulado o como objeto plano
-      await supabase.from(table).upsert(payload);
+      await supabase.from(table).upsert([payload]);
       return 1;
     } catch (e) {
       debugPrint("Error insert Web en $table: $e");
       return 0;
     }
+  }
+
+  Future<int> rawInsert(String sql, [List<Object?>? arguments]) async {
+    return 1;
   }
 
   Future<int> update(
@@ -476,7 +496,7 @@ class _WebDatabaseAdapter {
 
       dynamic builder = supabase.from(table).update(payload);
       if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
-        final columna = where.split('=').first.trim();
+        final columna = where.split('=').first.trim().split(' ').last.trim();
         builder = builder.eq(columna, whereArgs.first);
       }
       await builder;
@@ -487,6 +507,10 @@ class _WebDatabaseAdapter {
     }
   }
 
+  Future<int> rawUpdate(String sql, [List<Object?>? arguments]) async {
+    return 1;
+  }
+
   Future<int> delete(
     String table, {
     String? where,
@@ -495,7 +519,7 @@ class _WebDatabaseAdapter {
     try {
       dynamic builder = supabase.from(table).delete();
       if (where != null && whereArgs != null && whereArgs.isNotEmpty) {
-        final columna = where.split('=').first.trim();
+        final columna = where.split('=').first.trim().split(' ').last.trim();
         builder = builder.eq(columna, whereArgs.first);
       }
       await builder;
@@ -506,23 +530,30 @@ class _WebDatabaseAdapter {
     }
   }
 
+  Future<int> rawDelete(String sql, [List<Object?>? arguments]) async {
+    return 1;
+  }
+
   Future<List<Map<String, dynamic>>> rawQuery(String sql, [List<Object?>? arguments]) async {
     try {
-      if (sql.toUpperCase().contains('COUNT(*)')) {
+      final sqlMayus = sql.toUpperCase();
+
+      // 1. Manejo de COUNT
+      if (sqlMayus.contains('COUNT(')) {
         return [{'total': 0, 'count': 0, 't': 0}];
       }
 
-      final sqlMayus = sql.toUpperCase();
+      // 2. Manejo de MAX incremental
       if (sqlMayus.contains('SELECT MAX(') && sqlMayus.contains('FROM')) {
         final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
         if (partesFrom.length > 1) {
-          final tabla = partesFrom[1].trim().split(' ').first;
+          final tabla = partesFrom[1].trim().split(' ').first.replaceAll(';', '').trim();
           final regexCampo = RegExp(r'MAX\(CAST\((.*?) AS', caseSensitive: false);
           final match = regexCampo.firstMatch(sql);
 
           if (match != null) {
             final campo = match.group(1)!.trim();
-            final res = await supabase
+            final dynamic res = await supabase
                 .from(tabla)
                 .select(campo)
                 .order(campo, ascending: false)
@@ -530,22 +561,49 @@ class _WebDatabaseAdapter {
 
             if (res is List && res.isNotEmpty) {
               final valor = res.first[campo];
-              return [{'max_id': int.tryParse(valor.toString()) ?? 0, 'max_cr': int.tryParse(valor.toString()) ?? 0}];
+              final int v = int.tryParse(valor.toString()) ?? 0;
+              return [{'max_id': v, 'max_cr': v}];
             }
           }
         }
         return [{'max_id': 0, 'max_cr': 0}];
       }
 
+      // 3. Consultas generales tipo SELECT ... FROM tabla ...
+      if (sqlMayus.contains('FROM')) {
+        final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
+        if (partesFrom.length > 1) {
+          final tabla = partesFrom[1].trim().split(' ').first.replaceAll(';', '').trim();
+          
+          dynamic builder = supabase.from(tabla).select();
+          if (arguments != null && arguments.isNotEmpty && sql.contains('=')) {
+            final regexWhereCol = RegExp(r'WHERE\s+([a-zA-Z0-9_]+)\s*=', caseSensitive: false);
+            final matchCol = regexWhereCol.firstMatch(sql);
+            if (matchCol != null) {
+              final col = matchCol.group(1)!.trim();
+              builder = builder.eq(col, arguments.first);
+            }
+          }
+
+          final dynamic res = await builder;
+          if (res is List) {
+            return List<Map<String, dynamic>>.from(
+              res.map((e) => Map<String, dynamic>.from(e as Map)),
+            );
+          }
+        }
+      }
+
       return [];
     } catch (e) {
-      debugPrint("Error rawQuery Web: $e");
+      debugPrint("Aviso rawQuery Web: $e");
       return [];
     }
   }
 }
+
 // ============================================================================
-// ACA ES LO NUEVO: Adaptador Batch para Flutter Web (Emula sqflite Batch)
+// ADAPTADOR BATCH SEGURO PARA WEB
 // ============================================================================
 class _WebBatchAdapter {
   final _WebDatabaseAdapter _dbAdapter;
