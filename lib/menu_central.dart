@@ -415,8 +415,8 @@ class _MenuCentralState extends State<MenuCentral>
                               },
                             ),
                             ModuloCardItem(
-                              titulo: "Catálogo de Insumos",
-                              subtitulo: "PRINCIPIOS ACTIVOS & STOCK",
+                              titulo: "TUS INSUMOS",
+                              subtitulo: "CATALOGO DE PRODUCTOS & STOCK",
                               descripcion:
                                   "Stock disponible, principios activos y tiempos de carencia.",
                               icono: Icons.science_outlined,

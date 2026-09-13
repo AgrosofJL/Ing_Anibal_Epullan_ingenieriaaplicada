@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
@@ -966,24 +967,33 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                             await DatabaseHelper.instance.obtenerSiguienteId('aplicaciones_registros', 'registro');
                         Batch batch = db.batch();
                         int contador = 0;
+                        final String fechaAplic = fechaCtrl.text.trim();
 
+                        final List<Map<String, dynamic>> consumosParaRemoto = [];
+
+                        // Iteración: Cuartel x Producto
                         for (var cuartel in cuartelesSeleccionados) {
                           final double supCuartel = double.tryParse(cuartel['ha']?.toString() ?? '0') ?? 0.0;
                           final double litrosCuartel = ltrsSup * supCuartel;
 
                           for (var prod in itemsReceta) {
+                            final String regAplicId = '${siguienteRegId + contador}';
                             final double dosisMaq = double.tryParse(prod['dosis_maq']?.toString() ?? '0') ?? 0.0;
                             final double consumoProd = (litrosCuartel / 2000.0) * dosisMaq;
+                            final int idInsumos = prod['cod_producto'] is int
+                                ? prod['cod_producto']
+                                : int.tryParse(prod['cod_producto']?.toString() ?? '0') ?? 0;
 
+                            // 1. Registro de Labor
                             batch.insert('aplicaciones_registros', {
-                              'registro': '${siguienteRegId + contador}',
+                              'registro': regAplicId,
                               'cod_receta': prod['cod_receta'],
                               'cod_orden': widget.orden['cod_orden'],
                               'cod_productor': widget.codProductor,
                               'productor': widget.nombreProductor,
                               'orden_aplic': prod['orden_aplic'] ?? 1,
                               'ref': widget.orden['cod_orden'],
-                              'fecha': fechaCtrl.text.trim(),
+                              'fecha': fechaAplic,
                               'chacra': chacra,
                               'cuadros': cuartel['cuadro']?.toString() ?? '',
                               'variedad': cuartel['variedad']?.toString() ?? '',
@@ -994,7 +1004,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                               'tractorista': tractoristaCtrl.text.trim(),
                               'pulverizadora': maquinaCtrl.text.trim(),
                               'litros': litrosCuartel,
-                              'cod_producto': prod['cod_producto'],
+                              'cod_producto': idInsumos,
                               'producto': prod['producto'],
                               'dosis_100': prod['dosis_100'],
                               'dosis_maq': dosisMaq,
@@ -1005,25 +1015,59 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                               'mostrar': 'SI',
                               'sincronizado': 0,
                             });
+
+                            // 2. Descuento en insumos_detalles con ID de aplicación en reg_aplic
+                            final String codMovConsumo = "CON_${regAplicId}_${DateTime.now().millisecondsSinceEpoch}_$contador";
+                            final rowConsumoStock = {
+                              'cod_mov': codMovConsumo,
+                              'reg_ingreso': null,
+                              'reg_aplic': regAplicId, // 💡 ID de aplicaciones va aquí
+                              'cod_productor': widget.codProductor,
+                              'productor': widget.nombreProductor,
+                              'deposito': 'PAÑOL',
+                              'ID_Insumos': idInsumos,
+                              'producto': prod['producto'],
+                              'concetracion': '',
+                              'movimiento': 'CONSUMO',
+                              'cantidad': -consumoProd, // Valor negativo de consumo
+                              'unidad': 'L/Kg',
+                              'fec_vencimiento': null,
+                              'fecha_ingreso': fechaAplic,
+                              'reg_consumo': 'APLICACION_ORDEN_${widget.orden['cod_orden']}',
+                              'sincronizado': 0,
+                            };
+
+                            batch.insert('insumos_detalles', rowConsumoStock);
+                            consumosParaRemoto.add(rowConsumoStock);
+
                             contador++;
                           }
                         }
 
                         await batch.commit(noResult: true);
+
+                        // Sincronización a Supabase
+                        for (var c in consumosParaRemoto) {
+                          try {
+                            final rowSync = Map<String, dynamic>.from(c)..remove('sincronizado');
+                            await Supabase.instance.client.from('insumos_detalles').upsert(rowSync);
+                          } catch (_) {}
+                        }
+
                         if (context.mounted) {
                           Navigator.pop(ctx);
                           _cargarRegistrosAplicaciones();
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               backgroundColor: AgroTheme.colorAccent,
-                              content: Text('¡Se guardaron $contador registros de aplicación!'),
+                              content: Text('¡Se guardaron $contador labores y se descontaron de insumos_detalles!'),
                             ),
                           );
                         }
                       },
                       child: const Center(
                         child: Text(
-                          "Guardar Aplicaciones Desglosadas",
+                          "Guardar Aplicaciones y Descontar Stock",
                           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
                         ),
                       ),

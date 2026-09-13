@@ -295,6 +295,32 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
   Future<void> _recargarCatalogoInsumos() async {
     final db = await DatabaseHelper.instance.database;
 
+    // 💡 Traer solo insumos que tienen stock real en insumos_detalles para este productor
+    final List<Map<String, dynamic>> movimientosProd = await db.rawQuery('''
+      SELECT ID_Insumos, producto, concetracion, cantidad, movimiento, deposito
+      FROM insumos_detalles
+      WHERE cod_productor = ?
+    ''', [widget.codProductor]);
+
+    // Calcular el stock neto acumulado por ID_Insumos
+    final Map<int, double> stockPorInsumo = {};
+    for (var m in movimientosProd) {
+      final int idIns = (m['ID_Insumos'] is int)
+          ? m['ID_Insumos']
+          : int.tryParse(m['ID_Insumos']?.toString() ?? '0') ?? 0;
+      if (idIns <= 0) continue;
+
+      final double cant = double.tryParse(m['cantidad']?.toString() ?? '0') ?? 0.0;
+      final String mov = (m['movimiento'] ?? '').toString().trim().toUpperCase();
+
+      if (mov == 'INGRESO' || mov == 'STOCK INICIAL') {
+        stockPorInsumo[idIns] = (stockPorInsumo[idIns] ?? 0.0) + cant;
+      } else if (mov == 'CONSUMO' || mov == 'SALIDA' || mov == 'DESPACHO' || mov == 'BAJA' || mov == 'MERMA') {
+        stockPorInsumo[idIns] = (stockPorInsumo[idIns] ?? 0.0) - cant.abs();
+      }
+    }
+
+    // Filtrar catálogo técnico uniendo con el balance de stock disponible (> 0)
     final resInsumos = await db.rawQuery('''
       SELECT * FROM catalogo_insumos 
       WHERE rubro IN (
@@ -304,6 +330,20 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       ORDER BY Descripcion1 ASC
     ''');
 
+    final List<Map<String, dynamic>> insumosConStock = [];
+    for (var prod in resInsumos) {
+      final int idIns = (prod['ID_Insumos'] is int)
+          ? prod['ID_Insumos']
+          : int.tryParse(prod['ID_Insumos']?.toString() ?? '0') ?? 0;
+      final double stockDisponible = stockPorInsumo[idIns] ?? 0.0;
+
+      if (stockDisponible > 0) {
+        final itemMap = Map<String, dynamic>.from(prod);
+        itemMap['stock_productor_disponible'] = stockDisponible;
+        insumosConStock.add(itemMap);
+      }
+    }
+
     final resRubros = await db.rawQuery('''
       SELECT DISTINCT nombre FROM rubros_insumos 
       WHERE macro_rubro = 'PRODUCTOS' AND nombre IS NOT NULL AND TRIM(nombre) != ''
@@ -311,7 +351,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     ''');
 
     setState(() {
-      _catalogoInsumos = resInsumos;
+      _catalogoInsumos = insumosConStock;
       _rubrosInsumosDisponibles =
           resRubros.map((e) => e['nombre'].toString().trim().toUpperCase()).toList();
     });
@@ -1106,15 +1146,13 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
 
   void _agregarProductoATabla() {
     if (_idProductoSeleccionado == null || _idProductoSeleccionado!.trim().isEmpty) {
-      _mostrarAlerta('Por favor, selecciona un insumo del catálogo.');
+      _mostrarAlerta('Por favor, selecciona un insumo del catálogo con stock disponible.');
       return;
     }
 
     Map<String, dynamic> prodMap = {};
     for (var p in _catalogoInsumos) {
-      final String idActual = (p['cod_producto'] ?? p['ID_Insumos'] ?? p['id'] ?? p['Descripcion1'] ?? '')
-          .toString()
-          .trim();
+      final String idActual = (p['cod_producto'] ?? p['ID_Insumos'] ?? p['id'] ?? '').toString().trim();
       if (idActual == _idProductoSeleccionado!.trim()) {
         prodMap = p;
         break;
@@ -1122,7 +1160,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     }
 
     if (prodMap.isEmpty) {
-      _mostrarAlerta('El producto seleccionado no es válido.');
+      _mostrarAlerta('El producto seleccionado no cuenta con stock.');
       return;
     }
 
@@ -1134,24 +1172,27 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       return;
     }
 
-    final double volCaldoHa =
-        double.tryParse(_volumenHaController.text.replaceAll(',', '.').trim()) ?? 1000.0;
+    final double stockDisp = (prodMap['stock_productor_disponible'] as num?)?.toDouble() ?? 0.0;
+    final double volCaldoHa = double.tryParse(_volumenHaController.text.replaceAll(',', '.').trim()) ?? 1000.0;
 
     double dosis100Final = 0.0;
     double dosisMaqFinal = 0.0;
+    double consumoEstimado = 0.0;
 
     if (_metodoDosis == "DOSIS_100") {
       dosis100Final = dosisInput;
-      dosisMaqFinal = double.tryParse(
-              _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
-          (dosisInput * (_capacidadMaquinaLitros / 100.0));
+      dosisMaqFinal = dosisInput * (_capacidadMaquinaLitros / 100.0);
+      consumoEstimado = (dosis100Final / 100.0) * (_superficieTotalSeleccionada * volCaldoHa);
     } else {
-      // Dosis por Ha -> convertimos proporcionalmente a dosis cada 100L para registro estándar
       dosis100Final = volCaldoHa > 0 ? ((dosisInput / volCaldoHa) * 100.0) : dosisInput;
       final double haPorMaquina = volCaldoHa > 0 ? (_capacidadMaquinaLitros / volCaldoHa) : 2.0;
-      dosisMaqFinal = double.tryParse(
-              _dosisMaquinaController.text.trim().replaceAll(',', '.')) ??
-          (dosisInput * haPorMaquina);
+      dosisMaqFinal = dosisInput * haPorMaquina;
+      consumoEstimado = dosisInput * _superficieTotalSeleccionada;
+    }
+
+    if (consumoEstimado > stockDisp) {
+      _mostrarAlerta('El consumo estimado (${consumoEstimado.toStringAsFixed(1)} L/Kg) supera el stock disponible (${stockDisp.toStringAsFixed(1)} L/Kg).');
+      return;
     }
 
     setState(() {
@@ -1177,7 +1218,7 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         backgroundColor: AgroTheme.colorAccent,
-        content: Text('Insumo agregado a la receta exitosamente'),
+        content: Text('Insumo verificado con stock y agregado exitosamente'),
         duration: Duration(milliseconds: 900),
       ),
     );
@@ -1779,33 +1820,30 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
                               children: [
                                 Expanded(
                                   child: DropdownButtonFormField<String>(
-                                    value: _idProductoSeleccionado,
-                                    isExpanded: true,
-                                    decoration: _inputDecoration("Buscar Insumo / Principio Activo"),
-                                    hint: const Text("Selecciona un insumo...",
-                                        style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary)),
-                                    items: _catalogoInsumos.map((prod) {
-                                      final String idProd = (prod['cod_producto'] ??
-                                              prod['ID_Insumos'] ??
-                                              prod['id'] ??
-                                              prod['Descripcion1'])
-                                          .toString()
-                                          .trim();
-                                      final String nombre = prod['Descripcion1'] ??
-                                          prod['descripcion'] ??
-                                          'Insumo';
-                                      final String rubro = prod['rubro'] ?? 'General';
+                                       value: _idProductoSeleccionado,
+                                       isExpanded: true,
+                                       decoration: _inputDecoration("Buscar Insumo con Stock en Finca"),
+                                       hint: Text(
+                                       _catalogoInsumos.isEmpty
+                                       ? "Sin productos con stock en depósito para este productor..."
+                                       : "Selecciona un insumo disponible...",
+                                      style: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
+                                      ),
+                                      items: _catalogoInsumos.map((prod) {
+                                      final String idProd = (prod['cod_producto'] ?? prod['ID_Insumos'] ?? prod['id']).toString().trim();
+                                      final String nombre = prod['Descripcion1'] ?? prod['descripcion'] ?? 'Insumo';
+                                      final double stockDisp = (prod['stock_productor_disponible'] as num?)?.toDouble() ?? 0.0;
 
                                       return DropdownMenuItem<String>(
-                                        value: idProd,
-                                        child: Text(
-                                          "$nombre ($rubro)",
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                                        ),
-                                      );
-                                    }).toList(),
-                                    onChanged: (val) => setState(() => _idProductoSeleccionado = val),
+                                              value: idProd,
+                                              child: Text(
+                                            "$nombre · Stock: ${stockDisp.toStringAsFixed(1)} L/Kg",
+                                             overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                                            ),
+                                       );
+                                     }).toList(),
+                                    onChanged: _catalogoInsumos.isEmpty ? null : (val) => setState(() => _idProductoSeleccionado = val),
                                   ),
                                 ),
                                 const SizedBox(width: 8),

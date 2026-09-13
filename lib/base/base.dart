@@ -219,6 +219,46 @@ class DatabaseHelper {
       )
     ''');
 
+await db.execute('''
+  CREATE TABLE IF NOT EXISTS insumos_detalles (
+    cod_mov TEXT PRIMARY KEY,
+    reg_ingreso TEXT,
+    reg_aplic TEXT,
+    cod_productor INTEGER,
+    productor TEXT,
+    deposito TEXT,
+    ID_Insumos INTEGER,
+    producto TEXT,
+    concetracion TEXT,
+    movimiento TEXT,
+    cantidad REAL,
+    unidad TEXT,
+    fec_vencimiento TEXT,
+    fecha_ingreso TEXT,
+    reg_consumo TEXT,
+    sincronizado INTEGER DEFAULT 1
+  )
+''');
+await db.execute('''
+    CREATE TABLE IF NOT EXISTS insumos_detalles (
+      cod_mov TEXT PRIMARY KEY,
+      reg_ingreso TEXT,
+      reg_aplic TEXT,
+      cod_productor INTEGER,
+      productor TEXT,
+      deposito TEXT,
+      ID_Insumos INTEGER,
+      producto TEXT,
+      concetracion TEXT,
+      movimiento TEXT,
+      cantidad REAL,
+      unidad TEXT,
+      fec_vencimiento TEXT,
+      fecha_ingreso TEXT,
+      reg_consumo TEXT,
+      sincronizado INTEGER DEFAULT 1
+    )
+  ''');
     await _crearTablasCampo(db);
   }
 
