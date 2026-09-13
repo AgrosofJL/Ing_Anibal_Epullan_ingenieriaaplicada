@@ -27,7 +27,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 8, // Incrementado a 8 para disparar onUpgrade en bases locales existentes
+      version: 9, // Incrementado a 8 para disparar onUpgrade en bases locales existentes
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
