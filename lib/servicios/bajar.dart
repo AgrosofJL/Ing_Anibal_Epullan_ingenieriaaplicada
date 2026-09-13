@@ -79,11 +79,25 @@ class ServicioBajar {
     return licenciaActivaRemota;
   }
 
-  // 💡 2. Descarga incremental para bases SQLite locales (Móvil / Desktop)
+  // 💡 2. Comparador de igualdad entre valor de arriba (remoto) y valor de abajo (local)
+  static bool _sonValoresIguales(dynamic valorArriba, dynamic valorAbajo) {
+    if (valorArriba == null && valorAbajo == null) return true;
+    if (valorArriba == null || valorAbajo == null) return false;
+
+    // Si ambos son numéricos o texto numérico
+    final num? numArriba = num.tryParse(valorArriba.toString().trim());
+    final num? numAbajo = num.tryParse(valorAbajo.toString().trim());
+    if (numArriba != null && numAbajo != null) {
+      return (numArriba - numAbajo).abs() < 0.0001;
+    }
+
+    return valorArriba.toString().trim() == valorAbajo.toString().trim();
+  }
+
+  // 💡 3. Descarga con verificación diferencial fila por fila
   static Future<void> bajarIncremental({BuildContext? context}) async {
     await verificarLicencia(context: context);
 
-    // En Web los datos se leen directamente de Supabase en vivo
     if (kIsWeb) return;
 
     final client = SupabaseService.client;
@@ -99,21 +113,23 @@ class ServicioBajar {
       {'nombre': 'catalogo_insumos', 'pk': 'ID_Insumos'},
       {'nombre': 'recetas_aplicaciones', 'pk': 'cod_receta'},
       {'nombre': 'fenologia_parametros', 'pk': 'id'},
-      {'nombre': 'lecturas_fenologia', 'pk': 'id'},
-      {'nombre': 'lecturas_trampas', 'pk': 'id'},
+      {'nombre': 'lecturas_fenologia', 'pk': 'id,id_reg'},
+      {'nombre': 'lecturas_trampas', 'pk': 'id,id_reg'},
       {'nombre': 'parametros_aplic', 'pk': 'id'},
       {'nombre': 'config_app_enlaces', 'pk': 'id'},
-      {'nombre': 'insumos_detalles', 'pk': 'cod_mov'}, // 💡 Clave primaria correcta
+      {'nombre': 'insumos_detalles', 'pk': 'cod_mov'},
     ];
 
     for (final t in tablas) {
       final String tabla = t['nombre']!;
+      final String pkConfig = t['pk']!;
+      final List<String> columnasPk = pkConfig.split(',').map((e) => e.trim()).toList();
 
       int from = 0;
       bool hayMas = true;
 
       while (hayMas) {
-        List<dynamic> data = [];
+        List<dynamic> dataRemota = [];
         try {
           final dynamic res = await client
               .from(tabla)
@@ -121,7 +137,7 @@ class ServicioBajar {
               .range(from, from + _chunkSize - 1);
 
           if (res is List) {
-            data = res;
+            dataRemota = res;
           }
         } catch (e) {
           debugPrint("Aviso al descargar tabla $tabla: $e");
@@ -129,35 +145,95 @@ class ServicioBajar {
           break;
         }
 
-        if (data.isEmpty) {
+        if (dataRemota.isEmpty) {
           hayMas = false;
           break;
         }
 
         Batch batch = db.batch();
-        for (var row in data) {
-          final Map<String, dynamic> item = Map<String, dynamic>.from(row as Map);
+        int insercionesEnLote = 0;
+
+        for (var row in dataRemota) {
+          final Map<String, dynamic> filaArriba = Map<String, dynamic>.from(row as Map);
 
           if (tabla == 'catalogo_insumos') {
-            if (item.containsKey('principio activo')) {
-              item['principio_activo'] = item['principio activo'];
-              item.remove('principio activo');
+            if (filaArriba.containsKey('principio activo')) {
+              filaArriba['principio_activo'] = filaArriba['principio activo'];
+              filaArriba.remove('principio activo');
             }
           }
 
           if (tabla == 'recetas_aplicaciones') {
-            item['sincronizado'] = 1;
+            filaArriba['sincronizado'] = 1;
           }
 
-          batch.insert(
-            tabla,
-            item,
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        }
-        await batch.commit(noResult: true);
+          // Construcción de la consulta del registro local correspondiente
+          String whereClause = '';
+          List<dynamic> whereArgs = [];
 
-        if (data.length < _chunkSize) {
+          if (columnasPk.length == 1) {
+            final col = columnasPk.first;
+            whereClause = '$col = ?';
+            whereArgs = [filaArriba[col]];
+          } else {
+            whereClause = columnasPk.map((col) => '$col = ?').join(' AND ');
+            whereArgs = columnasPk.map((col) => filaArriba[col]).toList();
+          }
+
+          // Consultar el estado del registro abajo en SQLite
+          final List<Map<String, dynamic>> registrosAbajo = await db.query(
+            tabla,
+            where: whereClause,
+            whereArgs: whereArgs,
+            limit: 1,
+          );
+
+          bool huboCambio = false;
+
+          if (registrosAbajo.isEmpty) {
+            // El registro no existe abajo: es nuevo y debe insertarse
+            huboCambio = true;
+          } else {
+            final Map<String, dynamic> filaAbajo = registrosAbajo.first;
+
+            // Comparar cada columna remota contra la local
+            for (final entrada in filaArriba.entries) {
+              final String col = entrada.key;
+              final dynamic valArriba = entrada.value;
+
+              // Ignorar columnas de control local si existieran
+              if (col == 'sincronizado') continue;
+
+              if (filaAbajo.containsKey(col)) {
+                final dynamic valAbajo = filaAbajo[col];
+                if (!_sonValoresIguales(valArriba, valAbajo)) {
+                  huboCambio = true;
+                  break;
+                }
+              } else {
+                // Columna nueva agregada arriba
+                huboCambio = true;
+                break;
+              }
+            }
+          }
+
+          // Si arriba es distinto a abajo, se aplica la actualización
+          if (huboCambio) {
+            batch.insert(
+              tabla,
+              filaArriba,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+            insercionesEnLote++;
+          }
+        }
+
+        if (insercionesEnLote > 0) {
+          await batch.commit(noResult: true);
+        }
+
+        if (dataRemota.length < _chunkSize) {
           hayMas = false;
         } else {
           from += _chunkSize;

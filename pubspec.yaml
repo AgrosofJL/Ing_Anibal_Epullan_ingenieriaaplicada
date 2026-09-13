@@ -47,8 +47,18 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "logo/logo.png"
+  min_sdk_android: 21
   adaptive_icon_background: "#F4F5F7"
   adaptive_icon_foreground: "logo/logo.png"
+  web:
+    generate: true
+    image_path: "logo/logo.png"
+    background_color: "#F4F5F7"
+    theme_color: "#1E6B4C"
+  windows:
+    generate: true
+    image_path: "logo/logo.png"
+    icon_size: 48
   
 flutter:
   uses-material-design: true
