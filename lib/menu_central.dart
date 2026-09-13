@@ -415,7 +415,7 @@ class _MenuCentralState extends State<MenuCentral>
                               },
                             ),
                             ModuloCardItem(
-                              titulo: "TUS INSUMOS",
+                              titulo: "Deposito Insumos",
                               subtitulo: "CATALOGO DE PRODUCTOS & STOCK",
                               descripcion:
                                   "Stock disponible, principios activos y tiempos de carencia.",

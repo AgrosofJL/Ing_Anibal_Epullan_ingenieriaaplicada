@@ -11,7 +11,7 @@ class DatabaseHelper {
 
   final supabase = Supabase.instance.client;
 
-  // ACA ES LO NUEVO: Retorna _WebDatabaseAdapter en Web o Database en móvil
+  // Retorna _WebDatabaseAdapter en Web o Database en móvil/escritorio
   Future<dynamic> get database async {
     if (kIsWeb) {
       return _WebDatabaseAdapter(supabase);
@@ -27,7 +27,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 7,
+      version: 8, // Incrementado a 8 para disparar onUpgrade en bases locales existentes
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -102,14 +102,14 @@ class DatabaseHelper {
       )
     ''');
 
-     await db.execute('''
-      CREATE TABLE config_app_enlaces (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      plataforma text null,
-      url_instalacion text null,
-      version text null,
-      instrucciones text null,
-      sincronizado INTEGER DEFAULT 1
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS config_app_enlaces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plataforma TEXT,
+        url_instalacion TEXT,
+        version TEXT,
+        instrucciones TEXT,
+        sincronizado INTEGER DEFAULT 1
       )
     ''');
 
@@ -219,46 +219,27 @@ class DatabaseHelper {
       )
     ''');
 
-await db.execute('''
-  CREATE TABLE IF NOT EXISTS insumos_detalles (
-    cod_mov TEXT PRIMARY KEY,
-    reg_ingreso TEXT,
-    reg_aplic TEXT,
-    cod_productor INTEGER,
-    productor TEXT,
-    deposito TEXT,
-    ID_Insumos INTEGER,
-    producto TEXT,
-    concetracion TEXT,
-    movimiento TEXT,
-    cantidad REAL,
-    unidad TEXT,
-    fec_vencimiento TEXT,
-    fecha_ingreso TEXT,
-    reg_consumo TEXT,
-    sincronizado INTEGER DEFAULT 1
-  )
-''');
-await db.execute('''
-    CREATE TABLE IF NOT EXISTS insumos_detalles (
-      cod_mov TEXT PRIMARY KEY,
-      reg_ingreso TEXT,
-      reg_aplic TEXT,
-      cod_productor INTEGER,
-      productor TEXT,
-      deposito TEXT,
-      ID_Insumos INTEGER,
-      producto TEXT,
-      concetracion TEXT,
-      movimiento TEXT,
-      cantidad REAL,
-      unidad TEXT,
-      fec_vencimiento TEXT,
-      fecha_ingreso TEXT,
-      reg_consumo TEXT,
-      sincronizado INTEGER DEFAULT 1
-    )
-  ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS insumos_detalles (
+        cod_mov TEXT PRIMARY KEY,
+        reg_ingreso TEXT,
+        reg_aplic TEXT,
+        cod_productor INTEGER,
+        productor TEXT,
+        deposito TEXT,
+        ID_Insumos INTEGER,
+        producto TEXT,
+        concetracion TEXT,
+        movimiento TEXT,
+        cantidad REAL,
+        unidad TEXT,
+        fec_vencimiento TEXT,
+        fecha_ingreso TEXT,
+        reg_consumo TEXT,
+        sincronizado INTEGER DEFAULT 1
+      )
+    ''');
+
     await _crearTablasCampo(db);
   }
 
@@ -337,9 +318,55 @@ await db.execute('''
     if (oldV < 4) {
       await _crearTablasCampo(db);
     }
+    if (oldV < 7) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS parametros_aplic (
+          id INTEGER PRIMARY KEY,
+          vel_viento TEXT,
+          Temperatura TEXT,
+          Tamano_gota TEXT,
+          Vel_Aplicacion TEXT,
+          Caudal_Ha TEXT,
+          cod_receta INTEGER,
+          cod_orden INTEGER
+        )
+      ''');
+    }
+    if (oldV < 8) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS config_app_enlaces (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          plataforma TEXT,
+          url_instalacion TEXT,
+          version TEXT,
+          instrucciones TEXT,
+          sincronizado INTEGER DEFAULT 1
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS insumos_detalles (
+          cod_mov TEXT PRIMARY KEY,
+          reg_ingreso TEXT,
+          reg_aplic TEXT,
+          cod_productor INTEGER,
+          productor TEXT,
+          deposito TEXT,
+          ID_Insumos INTEGER,
+          producto TEXT,
+          concetracion TEXT,
+          movimiento TEXT,
+          cantidad REAL,
+          unidad TEXT,
+          fec_vencimiento TEXT,
+          fecha_ingreso TEXT,
+          reg_consumo TEXT,
+          sincronizado INTEGER DEFAULT 1
+        )
+      ''');
+    }
   }
 
-  // ESTO LO MODIFIQUE: Cálculo incremental compatible con Web y Móvil
   Future<int> obtenerSiguienteId(String tabla, String campoId) async {
     if (kIsWeb) {
       try {
@@ -368,9 +395,6 @@ await db.execute('''
   }
 }
 
-// ============================================================================
-// ACA ES LO NUEVO: Adaptador Web transparente que intercepta y redirige a Supabase
-// ============================================================================
 class _WebDatabaseAdapter {
   final SupabaseClient supabase;
   _WebDatabaseAdapter(this.supabase);
@@ -416,12 +440,10 @@ class _WebDatabaseAdapter {
 
   Future<List<Map<String, dynamic>>> rawQuery(String sql, [List<Object?>? arguments]) async {
     try {
-      // Conteo de registros para widgets o contadores
       if (sql.toUpperCase().contains('COUNT(*)')) {
         return [{'t': 0}];
       }
 
-      // SELECT MAX incremental
       final sqlMayus = sql.toUpperCase();
       if (sqlMayus.contains('SELECT MAX(') && sqlMayus.contains('FROM')) {
         final partesFrom = sql.split(RegExp(r'FROM', caseSensitive: false));
