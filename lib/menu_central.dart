@@ -306,7 +306,7 @@ class _MenuCentralState extends State<MenuCentral>
                                         ScaffoldMessenger.of(context);
                                     messenger.showSnackBar(
                                       const SnackBar(
-                                        content: Text("Sincronizando con Supabase..."),
+                                        content: Text("Sincronizando con Hosting de Agrosfot J&L.."),
                                         duration: Duration(milliseconds: 900),
                                       ),
                                     );

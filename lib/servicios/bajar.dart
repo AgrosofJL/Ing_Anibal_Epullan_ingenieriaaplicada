@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -17,24 +17,45 @@ class LicenciaInactivaException implements Exception {
 class ServicioBajar {
   static const int _chunkSize = 1000;
 
-  // 💡 1. Verificación remota de licencia
+  // 💡 1. Verificación remota de usuario, rol y licencia
+  // Retorna true si el rol o contexto del usuario cambió arriba
   static Future<bool> verificarLicencia({BuildContext? context}) async {
     final client = SupabaseService.client;
     final prefs = await SharedPreferences.getInstance();
 
+    final String correoActual = prefs.getString('userEmail') ?? '';
+    final String rolActual = (prefs.getString('userRole') ?? 'OPERARIO').toUpperCase().trim();
+    final int codProdActual = prefs.getInt('userCodProductor') ?? 0;
+
     bool licenciaActivaRemota = false;
     String estadoRemoto = 'INACTIVO';
+    bool rolModificado = false;
 
     try {
-      final dynamic resLic = await client
-          .from('usuarios')
-          .select()
-          .limit(1);
+      dynamic builder = client.from('usuarios').select();
+      if (correoActual.isNotEmpty) {
+        builder = builder.eq('correo', correoActual);
+      }
+      final dynamic resLic = await builder.limit(1);
 
       if (resLic is List && resLic.isNotEmpty) {
         final Map<String, dynamic> licData = Map<String, dynamic>.from(resLic.first as Map);
         estadoRemoto = (licData['estado'] ?? 'INACTIVO').toString().trim().toUpperCase();
         licenciaActivaRemota = estadoRemoto == 'ACTIVO';
+
+        final String nuevoRol = (licData['rol'] ?? 'OPERARIO').toString().toUpperCase().trim();
+        final int nuevoCodProd = int.tryParse(licData['cod_productor']?.toString() ?? '0') ?? 0;
+        final String nuevoNombre = (licData['operario'] ?? '').toString().trim();
+
+        // Detectar si cambiaron los permisos o el rol arriba
+        if (nuevoRol != rolActual || nuevoCodProd != codProdActual) {
+          rolModificado = true;
+          await prefs.setString('userRole', nuevoRol);
+          await prefs.setInt('userCodProductor', nuevoCodProd);
+          if (nuevoNombre.isNotEmpty) {
+            await prefs.setString('userName', nuevoNombre);
+          }
+        }
 
         if (!kIsWeb) {
           final db = await DatabaseHelper.instance.database;
@@ -44,13 +65,19 @@ class ServicioBajar {
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
         }
+      } else {
+        estadoRemoto = 'INACTIVO';
+        licenciaActivaRemota = false;
       }
     } catch (e) {
-      debugPrint("Aviso verificando licencia remota: $e");
+      debugPrint("Aviso verificando usuario/licencia: $e");
       if (!kIsWeb) {
         try {
           final db = await DatabaseHelper.instance.database;
-          final List<Map<String, dynamic>> licLocal = await db.query('usuarios', limit: 1);
+          final List<Map<String, dynamic>> licLocal = correoActual.isNotEmpty
+              ? await db.query('usuarios', where: 'correo = ?', whereArgs: [correoActual], limit: 1)
+              : await db.query('usuarios', limit: 1);
+
           if (licLocal.isNotEmpty) {
             estadoRemoto = (licLocal.first['estado'] ?? 'INACTIVO').toString().trim().toUpperCase();
             licenciaActivaRemota = estadoRemoto == 'ACTIVO';
@@ -62,6 +89,7 @@ class ServicioBajar {
     await prefs.setBool('licencia_activa', licenciaActivaRemota);
     await prefs.setString('licencia_estado', estadoRemoto);
 
+    // Si el usuario quedó INACTIVO, cerramos sesión pero permitimos que la subida ya haya impactado
     if (!licenciaActivaRemota) {
       await prefs.setBool('isLogged', false);
       await prefs.remove('userName');
@@ -72,19 +100,17 @@ class ServicioBajar {
       }
 
       throw LicenciaInactivaException(
-        "Sincronización finalizada. Licencia INACTIVA: el sistema ha sido bloqueado.",
+        "El usuario o licencia se encuentra INACTIVO en el servidor central.",
       );
     }
 
-    return licenciaActivaRemota;
+    return rolModificado;
   }
 
-  // 💡 2. Comparador de igualdad entre valor de arriba (remoto) y valor de abajo (local)
   static bool _sonValoresIguales(dynamic valorArriba, dynamic valorAbajo) {
     if (valorArriba == null && valorAbajo == null) return true;
     if (valorArriba == null || valorAbajo == null) return false;
 
-    // Si ambos son numéricos o texto numérico
     final num? numArriba = num.tryParse(valorArriba.toString().trim());
     final num? numAbajo = num.tryParse(valorAbajo.toString().trim());
     if (numArriba != null && numAbajo != null) {
@@ -94,11 +120,11 @@ class ServicioBajar {
     return valorArriba.toString().trim() == valorAbajo.toString().trim();
   }
 
-  // 💡 3. Descarga con verificación diferencial fila por fila
-  static Future<void> bajarIncremental({BuildContext? context}) async {
-    await verificarLicencia(context: context);
+  // 💡 2. Descarga diferencial verificando diferencias con lo de arriba
+  static Future<bool> bajarIncremental({BuildContext? context}) async {
+    final bool rolCambio = await verificarLicencia(context: context);
 
-    if (kIsWeb) return;
+    if (kIsWeb) return rolCambio;
 
     final client = SupabaseService.client;
     final db = await DatabaseHelper.instance.database;
@@ -167,7 +193,6 @@ class ServicioBajar {
             filaArriba['sincronizado'] = 1;
           }
 
-          // Construcción de la consulta del registro local correspondiente
           String whereClause = '';
           List<dynamic> whereArgs = [];
 
@@ -180,7 +205,6 @@ class ServicioBajar {
             whereArgs = columnasPk.map((col) => filaArriba[col]).toList();
           }
 
-          // Consultar el estado del registro abajo en SQLite
           final List<Map<String, dynamic>> registrosAbajo = await db.query(
             tabla,
             where: whereClause,
@@ -191,17 +215,14 @@ class ServicioBajar {
           bool huboCambio = false;
 
           if (registrosAbajo.isEmpty) {
-            // El registro no existe abajo: es nuevo y debe insertarse
             huboCambio = true;
           } else {
             final Map<String, dynamic> filaAbajo = registrosAbajo.first;
 
-            // Comparar cada columna remota contra la local
             for (final entrada in filaArriba.entries) {
               final String col = entrada.key;
               final dynamic valArriba = entrada.value;
 
-              // Ignorar columnas de control local si existieran
               if (col == 'sincronizado') continue;
 
               if (filaAbajo.containsKey(col)) {
@@ -211,14 +232,12 @@ class ServicioBajar {
                   break;
                 }
               } else {
-                // Columna nueva agregada arriba
                 huboCambio = true;
                 break;
               }
             }
           }
 
-          // Si arriba es distinto a abajo, se aplica la actualización
           if (huboCambio) {
             batch.insert(
               tabla,
@@ -240,6 +259,8 @@ class ServicioBajar {
         }
       }
     }
+
+    return rolCambio;
   }
 
   static void _mostrarBloqueoLicencia(BuildContext context) {
@@ -257,13 +278,13 @@ class ServicioBajar {
                 Icon(Icons.gavel_rounded, color: Color(0xFFEF4444), size: 28),
                 SizedBox(width: 10),
                 Text(
-                  "Licencia Suspendida",
+                  "Acceso Suspendido",
                   style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16.5),
                 ),
               ],
             ),
             content: const Text(
-              "El estado de la licencia de AgroSoft J&L no se encuentra ACTIVO en el servidor central. Comuníquese con soporte técnico o administración.",
+              "Tu usuario o establecimiento se encuentra en estado INACTIVO en el servidor central. Se han resguardado los datos pendientes, pero el acceso operativo ha quedado bloqueado.",
               style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13, height: 1.4),
             ),
             actions: [
