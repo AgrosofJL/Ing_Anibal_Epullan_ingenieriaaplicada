@@ -1344,6 +1344,73 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         }
       }
 
+// ESTO LO MODIFIQUE: Guardar o actualizar cabecera en ordenes_aplicaciones
+      final rowCabeceraOrden = {
+        'cod_orden': ordenIdFinal.toString(),
+        'cod_productor': widget.codProductor.toString(),
+        'productor': widget.nombreProductor,
+        'orden_aplic': 1,
+        'ref': ordenIdFinal,
+        'fecha': _fecha,
+        'chacra': _chacraSeleccionada,
+        'cuadros': cuadrosConcatenados,
+        'motivo_aplic': motivoFinal,
+        'momento_aplic': _momentoController.text.trim(),
+        'vol_aplic_ha': volHa,
+        'responsable': _responsable,
+        'estado': _esEdicion ? (widget.ordenParaEditar!['estado'] ?? 'ACTIVO') : 'ACTIVO',
+        'vol_100': volHa > 0 ? (volHa / 10.0) : 100.0,
+        'sincronizado': 0,
+      };
+
+      await db.insert(
+        'ordenes_aplicaciones',
+        rowCabeceraOrden,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+      try {
+        final payloadOrden = Map<String, dynamic>.from(rowCabeceraOrden)..remove('sincronizado');
+        await Supabase.instance.client.from('ordenes_aplicaciones').upsert(payloadOrden);
+      } catch (_) {}
+
+      // Guardar detalle en recetas_aplicaciones
+      for (int i = 0; i < _itemsRecetaTemporal.length; i++) {
+        final item = _itemsRecetaTemporal[i];
+        final int idActual = siguienteRecetaId + i;
+
+        final rowReceta = {
+          'cod_receta': idActual,
+          'cod_orden': ordenIdFinal,
+          'cod_productor': widget.codProductor,
+          'productor': widget.nombreProductor,
+          'orden_aplic': i + 1,
+          'ref': ordenIdFinal,
+          'fecha': _fecha,
+          'chacra': _chacraSeleccionada,
+          'cuadros': cuadrosConcatenados,
+          'motivo_aplic': motivoFinal,
+          'momento_aplic': _momentoController.text.trim(),
+          'vol_aplic_ha': volHa,
+          'responsable': _responsable,
+          'cod_producto': item['cod_producto'],
+          'producto': item['producto'],
+          'dosis_100': item['dosis_100'],
+          'dosis_maq': item['dosis_maq'],
+          'tc': item['tc'].toString(),
+          'ti': item['ti'].toString(),
+          'habilitado': _esEdicion ? (widget.ordenParaEditar!['estado'] ?? 'ACTIVO') : 'ACTIVO',
+          'sincronizado': 0,
+        };
+
+        batch.insert('recetas_aplicaciones', rowReceta, conflictAlgorithm: ConflictAlgorithm.replace);
+
+        try {
+          final payloadReceta = Map<String, dynamic>.from(rowReceta)..remove('sincronizado');
+          await Supabase.instance.client.from('recetas_aplicaciones').upsert(payloadReceta);
+        } catch (_) {}
+      }
+      
       final rowParametros = {
         'cod_orden': ordenIdFinal,
         'cod_receta': ordenIdFinal,

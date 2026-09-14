@@ -138,6 +138,8 @@ class ServicioBajar {
       {'nombre': 'inventario_plantacion', 'pk': 'id'},
       {'nombre': 'cuadros', 'pk': 'cod_cuadro'},
       {'nombre': 'catalogo_insumos', 'pk': 'ID_Insumos'},
+      // 💡 ACA ES LO NUEVO
+      {'nombre': 'ordenes_aplicaciones', 'pk': 'cod_orden'},
       {'nombre': 'recetas_aplicaciones', 'pk': 'cod_receta'},
       {'nombre': 'fenologia_parametros', 'pk': 'id'},
       {'nombre': 'lecturas_fenologia', 'pk': 'id,id_reg'},

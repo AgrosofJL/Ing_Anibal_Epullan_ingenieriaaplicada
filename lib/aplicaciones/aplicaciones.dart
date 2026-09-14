@@ -972,6 +972,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                         final List<Map<String, dynamic>> consumosParaRemoto = [];
 
                         // Iteración: Cuartel x Producto
+                        // Iteración: Cuartel x Producto
                         for (var cuartel in cuartelesSeleccionados) {
                           final double supCuartel = double.tryParse(cuartel['ha']?.toString() ?? '0') ?? 0.0;
                           final double litrosCuartel = ltrsSup * supCuartel;
@@ -979,7 +980,19 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                           for (var prod in itemsReceta) {
                             final String regAplicId = '${siguienteRegId + contador}';
                             final double dosisMaq = double.tryParse(prod['dosis_maq']?.toString() ?? '0') ?? 0.0;
-                            final double consumoProd = (litrosCuartel / 2000.0) * dosisMaq;
+                            final double dosisValor = double.tryParse(prod['dosis_valor']?.toString() ?? prod['dosis_100']?.toString() ?? '0') ?? 0.0;
+                            final String metodoDosis = (prod['metodo_dosis'] ?? '').toString().toUpperCase();
+
+                            // 💡 ESTO LO MODIFIQUE:
+                            // a) Si es por Ha del producto: consumimos Ha del cuadro x Dosis
+                            // b) Si es por 100L: caldo proporcional / 2000 * dosis máquina
+                            double consumoProd = 0.0;
+                            if (metodoDosis == 'DOSIS_HA') {
+                              consumoProd = supCuartel * dosisValor;
+                            } else {
+                              consumoProd = (litrosCuartel / 2000.0) * dosisMaq;
+                            }
+
                             final int idInsumos = prod['cod_producto'] is int
                                 ? prod['cod_producto']
                                 : int.tryParse(prod['cod_producto']?.toString() ?? '0') ?? 0;
@@ -1021,7 +1034,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                             final rowConsumoStock = {
                               'cod_mov': codMovConsumo,
                               'reg_ingreso': null,
-                              'reg_aplic': regAplicId, // 💡 ID de aplicaciones va aquí
+                              'reg_aplic': regAplicId,
                               'cod_productor': widget.codProductor,
                               'productor': widget.nombreProductor,
                               'deposito': 'PAÑOL',
@@ -1029,7 +1042,7 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                               'producto': prod['producto'],
                               'concetracion': '',
                               'movimiento': 'CONSUMO',
-                              'cantidad': -consumoProd, // Valor negativo de consumo
+                              'cantidad': -consumoProd, // Consumo en negativo
                               'unidad': 'L/Kg',
                               'fec_vencimiento': null,
                               'fecha_ingreso': fechaAplic,

@@ -221,7 +221,25 @@ class DatabaseHelper {
         sincronizado INTEGER DEFAULT 1
       )
     ''');
-
+await db.execute('''
+      CREATE TABLE IF NOT EXISTS ordenes_aplicaciones (
+        cod_orden TEXT PRIMARY KEY,
+        cod_productor TEXT,
+        productor TEXT,
+        orden_aplic INTEGER,
+        ref INTEGER,
+        fecha TEXT,
+        chacra TEXT,
+        cuadros TEXT,
+        motivo_aplic TEXT,
+        momento_aplic TEXT,
+        vol_aplic_ha REAL,
+        responsable TEXT,
+        estado TEXT,
+        vol_100 REAL,
+        sincronizado INTEGER DEFAULT 1
+      )
+    ''');
     await db.execute('''
       CREATE TABLE IF NOT EXISTS insumos_detalles (
         cod_mov TEXT PRIMARY KEY,
@@ -317,6 +335,7 @@ class DatabaseHelper {
     ''');
   }
 
+
   Future<void> _onUpgrade(Database db, int oldV, int newV) async {
     if (oldV < 4) {
       await _crearTablasCampo(db);
@@ -369,6 +388,7 @@ class DatabaseHelper {
       ''');
     }
   }
+
 
   Future<int> obtenerSiguienteId(String tabla, String campoId) async {
     final db = await instance.database;
