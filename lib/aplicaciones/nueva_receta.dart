@@ -1345,6 +1345,9 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
       }
 
 // ESTO LO MODIFIQUE: Guardar o actualizar cabecera en ordenes_aplicaciones
+      // ----------------------------------------------------------------------
+      // ESTO LO MODIFIQUE: Cabecera en ordenes_aplicaciones
+      // ----------------------------------------------------------------------
       final rowCabeceraOrden = {
         'cod_orden': ordenIdFinal.toString(),
         'cod_productor': widget.codProductor.toString(),
@@ -1374,10 +1377,23 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
         await Supabase.instance.client.from('ordenes_aplicaciones').upsert(payloadOrden);
       } catch (_) {}
 
-      // Guardar detalle en recetas_aplicaciones
+      // ----------------------------------------------------------------------
+      // ESTO LO MODIFIQUE: Detalle en recetas_aplicaciones con regla dosis_x
+      // ----------------------------------------------------------------------
       for (int i = 0; i < _itemsRecetaTemporal.length; i++) {
         final item = _itemsRecetaTemporal[i];
         final int idActual = siguienteRecetaId + i;
+
+        final bool esDosisHa = item['metodo_dosis'] == "DOSIS_HA";
+        final String dosisX = esDosisHa ? "dosis_ha" : "vol_100";
+        final double dosisValor = double.tryParse(item['dosis_valor']?.toString() ?? '0') ?? 0.0;
+
+        // Regla:
+        // Si es dosis_ha: vol_aplic_ha guarda la dosis por Ha, y dosis_100 / dosis_maq van en 0.
+        // Si es vol_100: vol_aplic_ha va en 0, y se guardan dosis_100 y dosis_maq.
+        final double volAplicHaFila = esDosisHa ? dosisValor : 0.0;
+        final double d100Fila = esDosisHa ? 0.0 : (double.tryParse(item['dosis_100']?.toString() ?? '0') ?? 0.0);
+        final double dMaqFila = esDosisHa ? 0.0 : (double.tryParse(item['dosis_maq']?.toString() ?? '0') ?? 0.0);
 
         final rowReceta = {
           'cod_receta': idActual,
@@ -1391,15 +1407,16 @@ class _NuevaRecetaScreenState extends State<NuevaRecetaScreen> {
           'cuadros': cuadrosConcatenados,
           'motivo_aplic': motivoFinal,
           'momento_aplic': _momentoController.text.trim(),
-          'vol_aplic_ha': volHa,
+          'vol_aplic_ha': volAplicHaFila, // 💡 Según la regla solicitada
           'responsable': _responsable,
           'cod_producto': item['cod_producto'],
           'producto': item['producto'],
-          'dosis_100': item['dosis_100'],
-          'dosis_maq': item['dosis_maq'],
+          'dosis_100': d100Fila,
+          'dosis_maq': dMaqFila,
           'tc': item['tc'].toString(),
           'ti': item['ti'].toString(),
           'habilitado': _esEdicion ? (widget.ordenParaEditar!['estado'] ?? 'ACTIVO') : 'ACTIVO',
+          'dosis_x': dosisX, // 💡 dosis_ha o vol_100
           'sincronizado': 0,
         };
 

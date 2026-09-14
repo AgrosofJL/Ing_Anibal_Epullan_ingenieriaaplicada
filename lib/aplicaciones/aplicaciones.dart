@@ -979,16 +979,16 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
 
                           for (var prod in itemsReceta) {
                             final String regAplicId = '${siguienteRegId + contador}';
+                            final String dosisX = (prod['dosis_x'] ?? '').toString().trim().toLowerCase();
+                            final double volAplicHaFila = double.tryParse(prod['vol_aplic_ha']?.toString() ?? '0') ?? 0.0;
                             final double dosisMaq = double.tryParse(prod['dosis_maq']?.toString() ?? '0') ?? 0.0;
-                            final double dosisValor = double.tryParse(prod['dosis_valor']?.toString() ?? prod['dosis_100']?.toString() ?? '0') ?? 0.0;
-                            final String metodoDosis = (prod['metodo_dosis'] ?? '').toString().toUpperCase();
 
                             // 💡 ESTO LO MODIFIQUE:
-                            // a) Si es por Ha del producto: consumimos Ha del cuadro x Dosis
-                            // b) Si es por 100L: caldo proporcional / 2000 * dosis máquina
+                            // a) Si dosis_x == 'dosis_ha': Consumo = Ha del cuadro * vol_aplic_ha (donde guardamos la dosis)
+                            // b) Si dosis_x == 'vol_100': Consumo = (litrosCuartel / 2000.0) * dosisMaq
                             double consumoProd = 0.0;
-                            if (metodoDosis == 'DOSIS_HA') {
-                              consumoProd = supCuartel * dosisValor;
+                            if (dosisX == 'dosis_ha') {
+                              consumoProd = supCuartel * volAplicHaFila;
                             } else {
                               consumoProd = (litrosCuartel / 2000.0) * dosisMaq;
                             }
@@ -997,7 +997,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                                 ? prod['cod_producto']
                                 : int.tryParse(prod['cod_producto']?.toString() ?? '0') ?? 0;
 
-                            // 1. Registro de Labor
                             batch.insert('aplicaciones_registros', {
                               'registro': regAplicId,
                               'cod_receta': prod['cod_receta'],
@@ -1028,7 +1027,6 @@ class _AplicacionesScreenState extends State<AplicacionesScreen> {
                               'mostrar': 'SI',
                               'sincronizado': 0,
                             });
-
                             // 2. Descuento en insumos_detalles con ID de aplicación en reg_aplic
                             final String codMovConsumo = "CON_${regAplicId}_${DateTime.now().millisecondsSinceEpoch}_$contador";
                             final rowConsumoStock = {

@@ -101,6 +101,7 @@ class DatabaseHelper {
         tc TEXT,
         ti TEXT,
         habilitado TEXT,
+        dosis_x TEXT,
         sincronizado INTEGER DEFAULT 1
       )
     ''');
