@@ -1,23 +1,51 @@
-import 'dart:io';
+// ignore_for_file: deprecated_member_use
+
 import 'dart:typed_data';
+
 import 'package:excel/excel.dart' hide Border;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:printing/printing.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
-import '../widgets/soft_button.dart';
+import '../widgets/agro_reportes_ui.dart';
+import '../widgets/agro_ui.dart';
+
+final NumberFormat _fmtHa = NumberFormat('#,##0.00', 'es');
+final NumberFormat _fmtEntero = NumberFormat('#,##0', 'es');
+
+double _haDe(Map<String, dynamic> item) =>
+    double.tryParse(item['ha']?.toString() ?? '0') ?? 0.0;
+
+int _plantasDe(Map<String, dynamic> item) =>
+    int.tryParse(item['plantas']?.toString() ?? '0') ?? 0;
+
+Color _colorCultivo(String cultivo) {
+  final c = cultivo.toLowerCase();
+  if (c.contains('manzano')) return const Color(0xFFC62828);
+  if (c.contains('peral')) return const Color(0xFF2E7D32);
+  if (c.contains('cerezo')) return const Color(0xFFAD1457);
+  if (c.contains('ciruelo')) return const Color(0xFF6A1B9A);
+  if (c.contains('durazn') || c.contains('pelón')) return const Color(0xFFE65100);
+  if (c.contains('vid')) return const Color(0xFF4527A0);
+  if (c.contains('nogal')) return const Color(0xFF6D4C41);
+  return AgroColors.primario;
+}
 
 class InventarioPlantacionScreen extends StatefulWidget {
-  const InventarioPlantacionScreen({super.key});
+  /// Productor con el que se abrió la pantalla (opcional). Para ingenieros /
+  /// administradores se preselecciona si está en la lista de activos.
+  final int? codProductor;
+  final String? nombreProductor;
+
+  const InventarioPlantacionScreen({
+    super.key,
+    this.codProductor,
+    this.nombreProductor,
+  });
 
   @override
   State<InventarioPlantacionScreen> createState() =>
@@ -27,12 +55,14 @@ class InventarioPlantacionScreen extends StatefulWidget {
 class _InventarioPlantacionScreenState
     extends State<InventarioPlantacionScreen> {
   bool _cargando = true;
+  bool _exportando = false;
   String _userRole = "OPERARIO";
   int _userCodProductor = 0;
 
   List<Map<String, dynamic>> _productores = [];
   int? _selectedCodProductor;
   String _selectedNombreProductor = "";
+  Map<String, dynamic>? _productorInfo;
 
   List<Map<String, dynamic>> _inventario = [];
   List<Map<String, dynamic>> _cuadros = [];
@@ -109,9 +139,14 @@ class _InventarioPlantacionScreenState
     super.dispose();
   }
 
+  // ============================================================
+  // LÓGICA DE DATOS
+  // ============================================================
+
   Future<void> _inicializar() async {
     final prefs = await SharedPreferences.getInstance();
-    _userRole = (prefs.getString('userRole') ?? "OPERARIO").toUpperCase().trim();
+    _userRole =
+        (prefs.getString('userRole') ?? "OPERARIO").toUpperCase().trim();
     _userCodProductor = prefs.getInt('userCodProductor') ?? 0;
 
     final db = await DatabaseHelper.instance.database;
@@ -125,9 +160,20 @@ class _InventarioPlantacionScreenState
       );
       _productores = prods;
       if (_productores.isNotEmpty) {
-        _selectedCodProductor = _productores.first['cod_productor'] as int;
-        _selectedNombreProductor =
-            (_productores.first['productor'] ?? '').toString();
+        // Si la pantalla se abrió con un productor y está activo, se usa ese;
+        // si no, el primero de la lista (comportamiento original).
+        Map<String, dynamic> elegido = _productores.first;
+        if (widget.codProductor != null) {
+          for (final p in _productores) {
+            if (p['cod_productor'] == widget.codProductor) {
+              elegido = p;
+              break;
+            }
+          }
+        }
+        _selectedCodProductor = elegido['cod_productor'] as int;
+        _selectedNombreProductor = (elegido['productor'] ?? '').toString();
+        _productorInfo = elegido;
       }
     } else {
       _selectedCodProductor = _userCodProductor;
@@ -139,20 +185,29 @@ class _InventarioPlantacionScreenState
       );
       if (resP.isNotEmpty) {
         _selectedNombreProductor = (resP.first['productor'] ?? '').toString();
+        _productorInfo = resP.first;
+      } else if ((widget.nombreProductor ?? '').trim().isNotEmpty) {
+        _selectedNombreProductor = widget.nombreProductor!.trim();
       }
     }
 
+    if (!mounted) return;
+    if (_selectedCodProductor == null) {
+      // Sin productores activos: no queda la pantalla cargando indefinidamente.
+      setState(() => _cargando = false);
+      return;
+    }
     await _cargarDatosCompletos();
   }
 
   bool get _esIngenieroOAdmin =>
       _userRole == 'INGENIERO' || _userRole == 'ADMIN' || _userRole == 'ADM';
 
-  bool get _puedeEditar =>
-      _esIngenieroOAdmin || _userRole == 'PROD-ADMIN';
+  bool get _puedeEditar => _esIngenieroOAdmin || _userRole == 'PROD-ADMIN';
 
   Future<void> _cargarDatosCompletos() async {
     if (_selectedCodProductor == null) return;
+    if (!mounted) return;
     setState(() => _cargando = true);
     final db = await DatabaseHelper.instance.database;
 
@@ -196,6 +251,24 @@ class _InventarioPlantacionScreenState
     });
   }
 
+  void _cambiarProductor(int cod) {
+    if (!_esIngenieroOAdmin) return;
+    Map<String, dynamic>? prod;
+    for (final p in _productores) {
+      if (p['cod_productor'] == cod) {
+        prod = p;
+        break;
+      }
+    }
+    if (prod == null) return;
+    setState(() {
+      _selectedCodProductor = cod;
+      _selectedNombreProductor = (prod!['productor'] ?? '').toString();
+      _productorInfo = prod;
+    });
+    _cargarDatosCompletos();
+  }
+
   List<Map<String, dynamic>> get _inventarioFiltrado {
     return _inventario.where((item) {
       final matchChacra = _chacraSeleccionada == "TODAS" ||
@@ -217,29 +290,46 @@ class _InventarioPlantacionScreenState
     }).toList();
   }
 
-  double get _superficieTotal {
+  bool get _hayFiltros =>
+      _chacraSeleccionada != "TODAS" || _filtroTexto.trim().isNotEmpty;
+
+  void _limpiarFiltros() {
+    setState(() {
+      _searchCtrl.clear();
+      _filtroTexto = "";
+      _chacraSeleccionada = "TODAS";
+    });
+  }
+
+  double _superficieDe(List<Map<String, dynamic>> lista) {
     double total = 0.0;
-    for (var i in _inventarioFiltrado) {
-      total += double.tryParse(i['ha']?.toString() ?? '0') ?? 0.0;
+    for (var i in lista) {
+      total += _haDe(i);
     }
     return total;
   }
 
-  int get _plantasTotales {
+  int _plantasTotalesDe(List<Map<String, dynamic>> lista) {
     int total = 0;
-    for (var i in _inventarioFiltrado) {
-      total += int.tryParse(i['plantas']?.toString() ?? '0') ?? 0;
+    for (var i in lista) {
+      total += _plantasDe(i);
     }
     return total;
   }
 
-  double get _densidadPromedio {
-    final sup = _superficieTotal;
-    if (sup <= 0) return 0.0;
-    return _plantasTotales / sup;
-  }
+  // ============================================================
+  // EXPORTACIÓN EXCEL
+  // ============================================================
 
   Future<void> _exportarExcelInventario() async {
+    if (_exportando) return;
+    final datos = _inventarioFiltrado;
+    if (datos.isEmpty) return;
+
+    setState(() => _exportando = true);
+    mostrarAgroSnack(context, 'Generando planilla de inventario…',
+        duracion: const Duration(milliseconds: 1500));
+
     try {
       final excel = Excel.createExcel();
       final sheet = excel['Catastro_Plantacion'];
@@ -271,82 +361,110 @@ class _InventarioPlantacionScreenState
       ];
 
       for (int i = 0; i < headers.length; i++) {
-        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        final cell = sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
         cell.value = TextCellValue(headers[i]);
         cell.cellStyle = headerStyle;
       }
 
       int rowIdx = 1;
-      for (var row in _inventarioFiltrado) {
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value =
-            TextCellValue(row['id']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value =
-            TextCellValue(row['chacra']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value =
-            TextCellValue(row['cuadro']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value =
-            TextCellValue(row['cultivo']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value =
-            TextCellValue(row['variedad']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value =
+      for (var row in datos) {
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx))
+            .value = TextCellValue(row['id']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx))
+            .value = TextCellValue(row['chacra']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx))
+            .value = TextCellValue(row['cuadro']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx))
+            .value = TextCellValue(row['cultivo']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx))
+            .value = TextCellValue(row['variedad']?.toString() ?? '');
+        sheet
+                .cell(
+                    CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx))
+                .value =
             DoubleCellValue(double.tryParse(row['ha']?.toString() ?? '0') ?? 0.0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value =
-            IntCellValue(int.tryParse(row['ano_plantacion']?.toString() ?? '0') ?? 0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx)).value =
+        sheet
+                .cell(
+                    CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx))
+                .value =
+            IntCellValue(
+                int.tryParse(row['ano_plantacion']?.toString() ?? '0') ?? 0);
+        sheet
+                .cell(
+                    CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx))
+                .value =
             IntCellValue(int.tryParse(row['plantas']?.toString() ?? '0') ?? 0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value =
-            DoubleCellValue(double.tryParse(row['dist_fila']?.toString() ?? '0') ?? 0.0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx)).value =
-            DoubleCellValue(double.tryParse(row['dist_arbol']?.toString() ?? '0') ?? 0.0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIdx)).value =
-            DoubleCellValue(double.tryParse(row['marco_plantacion']?.toString() ?? '0') ?? 0.0);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx)).value =
-            TextCellValue(row['sitema_riego']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx)).value =
-            TextCellValue(row['sistema_def']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 13, rowIndex: rowIdx)).value =
-            TextCellValue(row['orientacion']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 14, rowIndex: rowIdx)).value =
-            TextCellValue(row['up']?.toString() ?? '');
+        sheet
+                .cell(
+                    CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx))
+                .value =
+            DoubleCellValue(
+                double.tryParse(row['dist_fila']?.toString() ?? '0') ?? 0.0);
+        sheet
+                .cell(
+                    CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx))
+                .value =
+            DoubleCellValue(
+                double.tryParse(row['dist_arbol']?.toString() ?? '0') ?? 0.0);
+        sheet
+                .cell(CellIndex.indexByColumnRow(
+                    columnIndex: 10, rowIndex: rowIdx))
+                .value =
+            DoubleCellValue(
+                double.tryParse(row['marco_plantacion']?.toString() ?? '0') ??
+                    0.0);
+        sheet
+            .cell(
+                CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx))
+            .value = TextCellValue(row['sitema_riego']?.toString() ?? '');
+        sheet
+            .cell(
+                CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx))
+            .value = TextCellValue(row['sistema_def']?.toString() ?? '');
+        sheet
+            .cell(
+                CellIndex.indexByColumnRow(columnIndex: 13, rowIndex: rowIdx))
+            .value = TextCellValue(row['orientacion']?.toString() ?? '');
+        sheet
+            .cell(
+                CellIndex.indexByColumnRow(columnIndex: 14, rowIndex: rowIdx))
+            .value = TextCellValue(row['up']?.toString() ?? '');
         rowIdx++;
       }
 
-      final fileBytes = excel.save();
+      final fileBytes = excel.encode();
       if (fileBytes == null) return;
 
       final Uint8List bytes = Uint8List.fromList(fileBytes);
       final String nombreArchivo =
-          'Inventario_${_selectedNombreProductor.replaceAll(' ', '_')}.xlsx';
+          'Inventario_${agroNombreArchivo(_selectedNombreProductor)}.xlsx';
 
-      if (kIsWeb) {
-        await Printing.sharePdf(bytes: bytes, filename: nombreArchivo);
-      } else if (Platform.isWindows) {
-        final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-        final filePath = "${dir.path}/$nombreArchivo";
-        final file = File(filePath);
-        await file.writeAsBytes(bytes);
-        await OpenFilex.open(filePath);
-      } else {
-        await Share.shareXFiles(
-          [
-            XFile.fromData(
-              bytes,
-              name: nombreArchivo,
-              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            ),
-          ],
-          text: 'Catastro de Plantación - $_selectedNombreProductor',
-        );
-      }
-    } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: const Color(0xFFC62828), content: Text("Error al exportar: $e")),
+      await exportarArchivoAgro(
+        bytes: bytes,
+        nombre: nombreArchivo,
+        mime: AgroMime.xlsx,
+        texto: 'Catastro de Plantación - $_selectedNombreProductor',
+        context: context,
       );
+    } catch (e) {
+      if (mounted) {
+        mostrarAgroSnack(context, 'Error al exportar: $e',
+            tipo: AgroSnackTipo.error);
+      }
+    } finally {
+      if (mounted) setState(() => _exportando = false);
     }
   }
 
-  Future<void> _sincronizarRemoto(String tabla, Map<String, dynamic> data) async {
+  Future<void> _sincronizarRemoto(
+      String tabla, Map<String, dynamic> data) async {
     try {
       final supabase = Supabase.instance.client;
       await supabase.from(tabla).upsert(data);
@@ -355,35 +473,150 @@ class _InventarioPlantacionScreenState
     }
   }
 
-  InputDecoration _inputDecoration(String label, IconData icono) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(
-        fontSize: 12.5,
-        color: AgroTheme.colorTextSecondary,
-      ),
-      prefixIcon: Icon(
-        icono,
-        size: 18,
-        color: AgroTheme.colorTextSecondary,
-      ),
-      filled: true,
-      fillColor: AgroTheme.colorBg,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-        borderSide: const BorderSide(color: AgroTheme.colorBorder, width: 1.0),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-        borderSide: const BorderSide(color: Color(0xFF1E6B4C), width: 1.5),
-      ),
+  // ============================================================
+  // HELPERS DE FORMULARIO
+  // ============================================================
+
+  /// Dos campos lado a lado; en pantallas muy angostas se apilan.
+  Widget _parCampos(Widget a, Widget b) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        if (c.maxWidth < 340) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [a, const SizedBox(height: 12), b],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: a),
+            const SizedBox(width: 10),
+            Expanded(child: b),
+          ],
+        );
+      },
     );
   }
+
+  Widget _tituloBloque(String texto) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10, top: 4),
+      child: Text(texto.toUpperCase(), style: AgroText.overline),
+    );
+  }
+
+  // ============================================================
+  // SELECTOR DE PRODUCTOR
+  // ============================================================
+
+  void _abrirSelectorProductor() {
+    if (!_esIngenieroOAdmin || _productores.isEmpty) return;
+    String filtro = '';
+    final ctrl = TextEditingController();
+
+    mostrarAgroPanel<void>(
+      context: context,
+      titulo: 'Seleccionar productor',
+      subtitulo: '${_productores.length} establecimientos activos',
+      icono: Icons.swap_horiz_rounded,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx2, setModal) {
+            final q = filtro.toLowerCase();
+            final lista = _productores.where((p) {
+              if (q.isEmpty) return true;
+              return (p['productor'] ?? '')
+                      .toString()
+                      .toLowerCase()
+                      .contains(q) ||
+                  (p['cuit'] ?? '').toString().toLowerCase().contains(q) ||
+                  (p['localidad'] ?? '').toString().toLowerCase().contains(q);
+            }).toList();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AgroSearchField(
+                  controller: ctrl,
+                  hint: 'Buscar por nombre, CUIT o localidad…',
+                  onChanged: (v) => setModal(() => filtro = v),
+                ),
+                const SizedBox(height: 12),
+                if (lista.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Text('Sin coincidencias',
+                        textAlign: TextAlign.center,
+                        style: AgroText.secundario),
+                  ),
+                ...lista.map((p) {
+                  final cod = p['cod_productor'] as int;
+                  final sel = cod == _selectedCodProductor;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: AgroCard(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      borderColor: sel ? AgroColors.primario : null,
+                      color: sel ? AgroColors.primarioSoft : null,
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        if (!sel) _cambiarProductor(cod);
+                      },
+                      child: Row(
+                        children: [
+                          AgroIconBox(
+                            icono: Icons.agriculture_rounded,
+                            size: 38,
+                            color: sel
+                                ? AgroColors.primario
+                                : AgroTheme.colorTextSecondary,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  p['productor']?.toString() ?? 'S/N',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 14,
+                                    color: AgroTheme.colorText,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'CUIT ${p['cuit'] ?? 'S/D'} · ${p['localidad'] ?? 'Sin localidad'}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AgroText.secundario,
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (sel)
+                            const Icon(Icons.check_circle_rounded,
+                                color: AgroColors.primario, size: 22),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // ALTA DE CUADRO
+  // ============================================================
 
   void _mostrarModalNuevoCuadro() {
     final formKey = GlobalKey<FormState>();
@@ -397,227 +630,176 @@ class _InventarioPlantacionScreenState
 
     String riegoSeleccionado = "Goteo";
     String defensaSeleccionada = "Ninguna";
+    bool guardando = false;
 
-    showModalBottomSheet(
+    mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: 'Alta de cuadro / parcela',
+      subtitulo: _selectedNombreProductor.isEmpty
+          ? 'Parcela madre del establecimiento'
+          : _selectedNombreProductor,
+      icono: Icons.grid_view_rounded,
+      maxWidth: 560,
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (modalContext, setModalState) {
-            final mediaQuery = MediaQuery.of(modalContext);
+          builder: (ctx2, setModalState) {
+            Future<void> guardar() async {
+              if (guardando) return;
+              if (!formKey.currentState!.validate()) return;
+              setModalState(() => guardando = true);
+              try {
+                final db = await DatabaseHelper.instance.database;
 
-            return Container(
-              height: mediaQuery.size.height * 0.85,
-              decoration: const BoxDecoration(
-                color: AgroTheme.colorSurface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-              ),
-              padding: EdgeInsets.only(
-                top: 20,
-                left: 20,
-                right: 20,
-                bottom: mediaQuery.viewInsets.bottom + 20,
-              ),
-              child: Form(
-                key: formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
+                final int sigCodCuadro = await DatabaseHelper.instance
+                    .obtenerSiguienteId('cuadros', 'cod_cuadro');
+
+                final Map<String, dynamic> rowCuadro = {
+                  'cod_cuadro': sigCodCuadro,
+                  'cod_productor': _selectedCodProductor,
+                  'productor': _selectedNombreProductor,
+                  'chacra': chacraCtrl.text.trim(),
+                  'cuadro': cuadroCtrl.text.trim(),
+                  'sitema_riego': riegoSeleccionado,
+                  'sistema_def': defensaSeleccionada,
+                  'ubicacion': ubicacionCtrl.text.trim(),
+                  'sup': double.tryParse(
+                          supCtrl.text.trim().replaceAll(',', '.')) ??
+                      0.0,
+                };
+
+                await db.insert('cuadros', rowCuadro);
+                await _sincronizarRemoto('cuadros', rowCuadro);
+
+                if (!mounted) return;
+                if (ctx.mounted) Navigator.pop(ctx);
+                await _cargarDatosCompletos();
+
+                if (!mounted) return;
+                mostrarAgroSnack(
+                  context,
+                  'Cuadro ${rowCuadro['cuadro']} creado. Ahora asigná la plantación.',
+                  tipo: AgroSnackTipo.ok,
+                );
+                _mostrarModalNuevaPlantacion(preseleccionCuadro: rowCuadro);
+              } catch (e) {
+                if (ctx2.mounted) setModalState(() => guardando = false);
+                if (mounted) {
+                  mostrarAgroSnack(context, 'No se pudo guardar el cuadro: $e',
+                      tipo: AgroSnackTipo.error);
+                }
+              }
+            }
+
+            return Form(
+              key: formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _tituloBloque('Identificación'),
+                  TextFormField(
+                    controller: chacraCtrl,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: agroInputDecoration(
+                      label: "Nombre de chacra / lote",
+                      icono: Icons.terrain_rounded,
+                    ),
+                    validator: (v) =>
+                        v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                  ),
+                  const SizedBox(height: 12),
+                  _parCampos(
+                    TextFormField(
+                      controller: cuadroCtrl,
+                      decoration: agroInputDecoration(
+                        label: "N° de cuadro",
+                        icono: Icons.grid_view_rounded,
                       ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Obligatorio" : null,
                     ),
-                    const SizedBox(height: 14),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Alta de Cuadro / Parcela",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 17,
-                                  color: AgroTheme.colorText),
-                            ),
-                            Text(
-                              _selectedNombreProductor,
-                              style: const TextStyle(
-                                  fontSize: 12,
-                                  color: AgroTheme.colorTextSecondary),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded),
-                          onPressed: () => Navigator.pop(ctx),
-                        ),
-                      ],
-                    ),
-                    const Divider(color: AgroTheme.colorBorder),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        child: Column(
-                          children: [
-                            TextFormField(
-                              controller: chacraCtrl,
-                              decoration: _inputDecoration(
-                                  "Nombre de Chacra / Lote",
-                                  Icons.terrain_rounded),
-                              validator: (v) => v == null || v.trim().isEmpty
-                                  ? "Obligatorio"
-                                  : null,
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: TextFormField(
-                                    controller: cuadroCtrl,
-                                    decoration: _inputDecoration(
-                                        "N° de Cuadro", Icons.grid_view_rounded),
-                                    validator: (v) =>
-                                        v == null || v.trim().isEmpty
-                                            ? "Obligatorio"
-                                            : null,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  flex: 3,
-                                  child: TextFormField(
-                                    controller: supCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                            decimal: true),
-                                    decoration: _inputDecoration(
-                                        "Superficie (Ha)",
-                                        Icons.aspect_ratio_rounded),
-                                    validator: (v) =>
-                                        v == null || v.trim().isEmpty
-                                            ? "Obligatorio"
-                                            : null,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<String>(
-                              value: riegoSeleccionado,
-                              decoration: _inputDecoration(
-                                  "Sistema de Riego", Icons.water_drop_outlined),
-                              items: const [
-                                DropdownMenuItem(
-                                    value: "Goteo", child: Text("Riego por Goteo")),
-                                DropdownMenuItem(
-                                    value: "Gravedad / Manto",
-                                    child: Text("Gravedad / Manto")),
-                                DropdownMenuItem(
-                                    value: "Aspersión",
-                                    child: Text("Microaspersión / Aspersión")),
-                                DropdownMenuItem(
-                                    value: "Surco", child: Text("Por Surco")),
-                              ],
-                              onChanged: (v) => setModalState(
-                                  () => riegoSeleccionado = v ?? "Goteo"),
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<String>(
-                              value: defensaSeleccionada,
-                              decoration: _inputDecoration(
-                                  "Defensa Climatológica", Icons.shield_outlined),
-                              items: const [
-                                DropdownMenuItem(
-                                    value: "Ninguna", child: Text("Sin Defensa")),
-                                DropdownMenuItem(
-                                    value: "Malla Antigranizo",
-                                    child: Text("Malla Antigranizo")),
-                                DropdownMenuItem(
-                                    value: "Riego Subarbóreo (Antihelada)",
-                                    child: Text("Riego Subarbóreo (Antihelada)")),
-                                DropdownMenuItem(
-                                    value: "Riego Supra-arbóreo (Antihelada)",
-                                    child: Text("Riego Supra-arbóreo")),
-                                DropdownMenuItem(
-                                    value: "Calefactores / Molinos",
-                                    child:
-                                        Text("Calefactores / Molinos de Viento")),
-                              ],
-                              onChanged: (v) => setModalState(
-                                  () => defensaSeleccionada = v ?? "Ninguna"),
-                            ),
-                            const SizedBox(height: 12),
-                            TextFormField(
-                              controller: ubicacionCtrl,
-                              decoration: _inputDecoration(
-                                  "Ubicación / Referencia (Opcional)",
-                                  Icons.location_on_outlined),
-                            ),
-                          ],
-                        ),
+                    TextFormField(
+                      controller: supCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: agroInputDecoration(
+                        label: "Superficie",
+                        icono: Icons.aspect_ratio_rounded,
+                        sufijo: 'ha',
                       ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Obligatorio" : null,
                     ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: SoftButton(
-                        onTap: () async {
-                          if (!formKey.currentState!.validate()) return;
-                          final db = await DatabaseHelper.instance.database;
-
-                          final int sigCodCuadro = await DatabaseHelper.instance
-                              .obtenerSiguienteId('cuadros', 'cod_cuadro');
-
-                          final rowCuadro = {
-                            'cod_cuadro': sigCodCuadro,
-                            'cod_productor': _selectedCodProductor,
-                            'productor': _selectedNombreProductor,
-                            'chacra': chacraCtrl.text.trim(),
-                            'cuadro': cuadroCtrl.text.trim(),
-                            'sitema_riego': riegoSeleccionado,
-                            'sistema_def': defensaSeleccionada,
-                            'ubicacion': ubicacionCtrl.text.trim(),
-                            'sup': double.tryParse(
-                                    supCtrl.text.trim().replaceAll(',', '.')) ??
-                                0.0,
-                          };
-
-                          await db.insert('cuadros', rowCuadro);
-                          await _sincronizarRemoto('cuadros', rowCuadro);
-
-                          if (!mounted) return;
-                          Navigator.pop(ctx);
-                          await _cargarDatosCompletos();
-
-                          if (!mounted) return;
-                          _mostrarModalNuevaPlantacion(
-                              preseleccionCuadro: rowCuadro);
-                        },
-                        child: const Center(
-                          child: Text(
-                            "Guardar Cuadro y Asignar Plantación",
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 14),
-                          ),
-                        ),
-                      ),
+                  ),
+                  const SizedBox(height: 18),
+                  _tituloBloque('Infraestructura'),
+                  DropdownButtonFormField<String>(
+                    value: riegoSeleccionado,
+                    isExpanded: true,
+                    decoration: agroInputDecoration(
+                      label: "Sistema de riego",
+                      icono: Icons.water_drop_outlined,
                     ),
-                  ],
-                ),
+                    items: const [
+                      DropdownMenuItem(
+                          value: "Goteo", child: Text("Riego por Goteo")),
+                      DropdownMenuItem(
+                          value: "Gravedad / Manto",
+                          child: Text("Gravedad / Manto")),
+                      DropdownMenuItem(
+                          value: "Aspersión",
+                          child: Text("Microaspersión / Aspersión")),
+                      DropdownMenuItem(value: "Surco", child: Text("Por Surco")),
+                    ],
+                    onChanged: (v) =>
+                        setModalState(() => riegoSeleccionado = v ?? "Goteo"),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: defensaSeleccionada,
+                    isExpanded: true,
+                    decoration: agroInputDecoration(
+                      label: "Defensa climatológica",
+                      icono: Icons.shield_outlined,
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                          value: "Ninguna", child: Text("Sin Defensa")),
+                      DropdownMenuItem(
+                          value: "Malla Antigranizo",
+                          child: Text("Malla Antigranizo")),
+                      DropdownMenuItem(
+                          value: "Riego Subarbóreo (Antihelada)",
+                          child: Text("Riego Subarbóreo (Antihelada)",
+                              overflow: TextOverflow.ellipsis)),
+                      DropdownMenuItem(
+                          value: "Riego Supra-arbóreo (Antihelada)",
+                          child: Text("Riego Supra-arbóreo")),
+                      DropdownMenuItem(
+                          value: "Calefactores / Molinos",
+                          child: Text("Calefactores / Molinos de Viento",
+                              overflow: TextOverflow.ellipsis)),
+                    ],
+                    onChanged: (v) => setModalState(
+                        () => defensaSeleccionada = v ?? "Ninguna"),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: ubicacionCtrl,
+                    decoration: agroInputDecoration(
+                      label: "Ubicación / referencia",
+                      hint: "Opcional",
+                      icono: Icons.location_on_outlined,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  AgroButton(
+                    label: "Guardar cuadro y asignar plantación",
+                    icono: Icons.save_rounded,
+                    expandido: true,
+                    cargando: guardando,
+                    onTap: guardar,
+                  ),
+                ],
               ),
             );
           },
@@ -626,7 +808,12 @@ class _InventarioPlantacionScreenState
     );
   }
 
-  void _mostrarModalNuevaPlantacion({Map<String, dynamic>? preseleccionCuadro}) {
+  // ============================================================
+  // ALTA DE CUARTEL DE PLANTACIÓN
+  // ============================================================
+
+  void _mostrarModalNuevaPlantacion(
+      {Map<String, dynamic>? preseleccionCuadro}) {
     if (_cuadros.isEmpty) {
       _mostrarModalNuevoCuadro();
       return;
@@ -636,6 +823,11 @@ class _InventarioPlantacionScreenState
 
     Map<String, dynamic> cuadroActual = preseleccionCuadro ?? _cuadros.first;
     int codCuadroSeleccionado = cuadroActual['cod_cuadro'] as int;
+    // Asegura que el cuadro preseleccionado exista entre las opciones.
+    if (!_cuadros.any((c) => c['cod_cuadro'] == codCuadroSeleccionado)) {
+      cuadroActual = _cuadros.first;
+      codCuadroSeleccionado = cuadroActual['cod_cuadro'] as int;
+    }
 
     String cultivoSeleccionado = _cultivosVariedades.keys.first;
     List<String> listaVariedades = _cultivosVariedades[cultivoSeleccionado]!;
@@ -648,6 +840,7 @@ class _InventarioPlantacionScreenState
     final distFilaCtrl = TextEditingController(text: "4.0");
     final distArbolCtrl = TextEditingController(text: "1.5");
     String orientacionSeleccionada = "Norte - Sur";
+    bool guardando = false;
 
     void calcularPlantasAuto() {
       final double distF =
@@ -664,302 +857,335 @@ class _InventarioPlantacionScreenState
       }
     }
 
-    showModalBottomSheet(
+    mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: 'Registrar cuartel de plantación',
+      subtitulo: _selectedNombreProductor.isEmpty
+          ? 'Especie, variedad, marco y densidad'
+          : _selectedNombreProductor,
+      icono: Icons.park_outlined,
+      maxWidth: 600,
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (modalContext, setModalState) {
-            final mediaQuery = MediaQuery.of(modalContext);
+          builder: (ctx2, setModalState) {
+            final double distF =
+                double.tryParse(distFilaCtrl.text.replaceAll(',', '.')) ?? 0.0;
+            final double distA =
+                double.tryParse(distArbolCtrl.text.replaceAll(',', '.')) ??
+                    0.0;
+            final double haForm =
+                double.tryParse(haCtrl.text.replaceAll(',', '.')) ?? 0.0;
+            final int plantasForm =
+                int.tryParse(plantasCtrl.text.trim()) ?? 0;
+            final double marco = distF * distA;
+            final double densidad = marco > 0 ? 10000 / marco : 0.0;
 
-            return Container(
-              height: mediaQuery.size.height * 0.92,
-              decoration: const BoxDecoration(
-                color: AgroTheme.colorSurface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-              ),
-              padding: EdgeInsets.only(
-                top: 20,
-                left: 20,
-                right: 20,
-                bottom: mediaQuery.viewInsets.bottom + 20,
-              ),
-              child: Form(
-                key: formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
+            Future<void> guardar() async {
+              if (guardando) return;
+              if (!formKey.currentState!.validate()) return;
+              setModalState(() => guardando = true);
+              try {
+                final db = await DatabaseHelper.instance.database;
+
+                final int sigId = await DatabaseHelper.instance
+                    .obtenerSiguienteId('inventario_plantacion', 'id');
+
+                final double distF = double.tryParse(
+                        distFilaCtrl.text.replaceAll(',', '.')) ??
+                    0.0;
+                final double distA = double.tryParse(
+                        distArbolCtrl.text.replaceAll(',', '.')) ??
+                    0.0;
+
+                final Map<String, dynamic> rowInv = {
+                  'id': sigId,
+                  'cod_productor': _selectedCodProductor,
+                  'productor': _selectedNombreProductor,
+                  'chacra': cuadroActual['chacra'],
+                  'cod_cuadro': codCuadroSeleccionado,
+                  'cuadro': cuadroActual['cuadro'],
+                  'cultivo': cultivoSeleccionado,
+                  'variedad': variedadSeleccionada,
+                  'ano_plantacion':
+                      int.tryParse(anoCtrl.text.trim()) ?? DateTime.now().year,
+                  'ha': double.tryParse(
+                          haCtrl.text.trim().replaceAll(',', '.')) ??
+                      0.0,
+                  'plantas': int.tryParse(plantasCtrl.text.trim()) ?? 0,
+                  'marco_plantacion': (distF * distA).round(),
+                  'up': upCtrl.text.trim(),
+                  'dist_arbol': distA,
+                  'dist_fila': distF,
+                  'orientacion': orientacionSeleccionada,
+                  'sitema_riego': cuadroActual['sitema_riego'] ?? 'Goteo',
+                  'sistema_def': cuadroActual['sistema_def'] ?? 'Ninguna',
+                };
+
+                await db.insert('inventario_plantacion', rowInv);
+                await _sincronizarRemoto('inventario_plantacion', rowInv);
+
+                if (!mounted) return;
+                if (ctx.mounted) Navigator.pop(ctx);
+                await _cargarDatosCompletos();
+
+                if (!mounted) return;
+                mostrarAgroSnack(
+                  context,
+                  "¡Cuartel de plantación registrado con éxito!",
+                  tipo: AgroSnackTipo.ok,
+                );
+              } catch (e) {
+                if (ctx2.mounted) setModalState(() => guardando = false);
+                if (mounted) {
+                  mostrarAgroSnack(
+                      context, 'No se pudo guardar la plantación: $e',
+                      tipo: AgroSnackTipo.error);
+                }
+              }
+            }
+
+            return Form(
+              key: formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Cuadro destino
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AgroColors.primarioSoft,
+                      borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
                     ),
-                    const SizedBox(height: 14),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    child: Row(
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              "Registrar Cuartel de Plantación",
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 17,
-                                color: AgroTheme.colorText,
-                              ),
+                        const Icon(Icons.place_outlined,
+                            size: 18, color: AgroColors.primario),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Chacra: ${cuadroActual['chacra']} · Cuadro: ${cuadroActual['cuadro']}",
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                              color: AgroColors.primario,
                             ),
-                            Text(
-                              "Chacra: ${cuadroActual['chacra']} · Cuadro: ${cuadroActual['cuadro']}",
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF1E6B4C),
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded),
-                          onPressed: () => Navigator.pop(ctx),
+                          ),
                         ),
                       ],
                     ),
-                    const Divider(color: AgroTheme.colorBorder),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            DropdownButtonFormField<int>(
-                              value: codCuadroSeleccionado,
-                              decoration: _inputDecoration(
-                                "Cuadro Asignado",
-                                Icons.grid_view_rounded,
-                              ),
-                              items: _cuadros.map((c) {
-                                return DropdownMenuItem<int>(
-                                  value: c['cod_cuadro'] as int,
-                                  child: Text(
-                                    "${c['chacra']} - Cuadro ${c['cuadro']} (${c['sup'] ?? 0} Ha)",
-                                  ),
-                                );
-                              }).toList(),
-                              onChanged: (v) {
-                                if (v != null) {
-                                  setModalState(() {
-                                    codCuadroSeleccionado = v;
-                                    cuadroActual = _cuadros.firstWhere(
-                                      (c) => c['cod_cuadro'] == v,
-                                    );
-                                    haCtrl.text = "${cuadroActual['sup'] ?? ''}";
-                                    calcularPlantasAuto();
-                                  });
-                                }
-                              },
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: cultivoSeleccionado,
-                                    decoration: _inputDecoration(
-                                      "Cultivo",
-                                      Icons.eco_outlined,
-                                    ),
-                                    items: _cultivosVariedades.keys.map((cul) {
-                                      return DropdownMenuItem<String>(
-                                        value: cul,
-                                        child: Text(cul),
-                                      );
-                                    }).toList(),
-                                    onChanged: (v) {
-                                      if (v != null) {
-                                        setModalState(() {
-                                          cultivoSeleccionado = v;
-                                          listaVariedades = _cultivosVariedades[v] ?? [];
-                                          variedadSeleccionada = listaVariedades.first;
-                                        });
-                                      }
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    value: variedadSeleccionada,
-                                    decoration: _inputDecoration(
-                                      "Variedad",
-                                      Icons.nature_rounded,
-                                    ),
-                                    items: listaVariedades.map((vari) {
-                                      return DropdownMenuItem<String>(
-                                        value: vari,
-                                        child: Text(
-                                          vari,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      );
-                                    }).toList(),
-                                    onChanged: (v) => setModalState(
-                                      () => variedadSeleccionada =
-                                          v ?? listaVariedades.first,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: distFilaCtrl,
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    decoration: _inputDecoration("Entre Filas (m)", Icons.straighten_rounded),
-                                    onChanged: (_) => calcularPlantasAuto(),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: distArbolCtrl,
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    decoration: _inputDecoration("Entre Plantas (m)", Icons.height_rounded),
-                                    onChanged: (_) => calcularPlantasAuto(),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: haCtrl,
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                    decoration: _inputDecoration("Superficie (Ha)", Icons.aspect_ratio_rounded),
-                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
-                                    onChanged: (_) => calcularPlantasAuto(),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: plantasCtrl,
-                                    keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration("Total Plantas", Icons.forest_outlined),
-                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: anoCtrl,
-                                    keyboardType: TextInputType.number,
-                                    decoration: _inputDecoration("Año Plantación", Icons.event_note_rounded),
-                                    validator: (v) => v == null || v.trim().isEmpty ? "Obligatorio" : null,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: upCtrl,
-                                    decoration: _inputDecoration("UP (Unidad Prod)", Icons.badge_outlined),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<String>(
-                              value: orientacionSeleccionada,
-                              decoration: _inputDecoration("Orientación", Icons.explore_outlined),
-                              items: const [
-                                DropdownMenuItem(value: "Norte - Sur", child: Text("Norte - Sur (Recomendada)")),
-                                DropdownMenuItem(value: "Este - Oeste", child: Text("Este - Oeste")),
-                                DropdownMenuItem(value: "Diagonal / Otra", child: Text("Diagonal / Otra")),
-                              ],
-                              onChanged: (v) => setModalState(() => orientacionSeleccionada = v ?? "Norte - Sur"),
-                            ),
-                            const SizedBox(height: 20),
-                          ],
-                        ),
-                      ),
+                  ),
+                  const SizedBox(height: 16),
+                  _tituloBloque('Ubicación y especie'),
+                  DropdownButtonFormField<int>(
+                    value: codCuadroSeleccionado,
+                    isExpanded: true,
+                    decoration: agroInputDecoration(
+                      label: "Cuadro asignado",
+                      icono: Icons.grid_view_rounded,
                     ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: SoftButton(
-                        onTap: () async {
-                          if (!formKey.currentState!.validate()) return;
-                          final db = await DatabaseHelper.instance.database;
-
-                          final int sigId = await DatabaseHelper.instance
-                              .obtenerSiguienteId('inventario_plantacion', 'id');
-
-                          final double distF = double.tryParse(distFilaCtrl.text.replaceAll(',', '.')) ?? 0.0;
-                          final double distA = double.tryParse(distArbolCtrl.text.replaceAll(',', '.')) ?? 0.0;
-
-                          final rowInv = {
-                            'id': sigId,
-                            'cod_productor': _selectedCodProductor,
-                            'productor': _selectedNombreProductor,
-                            'chacra': cuadroActual['chacra'],
-                            'cod_cuadro': codCuadroSeleccionado,
-                            'cuadro': cuadroActual['cuadro'],
-                            'cultivo': cultivoSeleccionado,
-                            'variedad': variedadSeleccionada,
-                            'ano_plantacion': int.tryParse(anoCtrl.text.trim()) ?? DateTime.now().year,
-                            'ha': double.tryParse(haCtrl.text.trim().replaceAll(',', '.')) ?? 0.0,
-                            'plantas': int.tryParse(plantasCtrl.text.trim()) ?? 0,
-                            'marco_plantacion': (distF * distA).round(),
-                            'up': upCtrl.text.trim(),
-                            'dist_arbol': distA,
-                            'dist_fila': distF,
-                            'orientacion': orientacionSeleccionada,
-                            'sitema_riego': cuadroActual['sitema_riego'] ?? 'Goteo',
-                            'sistema_def': cuadroActual['sistema_def'] ?? 'Ninguna',
-                          };
-
-                          await db.insert('inventario_plantacion', rowInv);
-                          await _sincronizarRemoto('inventario_plantacion', rowInv);
-
-                          if (!mounted) return;
-                          Navigator.pop(ctx);
-                          await _cargarDatosCompletos();
-
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              backgroundColor: Color(0xFF1E6B4C),
-                              content: Text("¡Cuartel de plantación registrado con éxito!"),
-                            ),
+                    items: _cuadros.map((c) {
+                      return DropdownMenuItem<int>(
+                        value: c['cod_cuadro'] as int,
+                        child: Text(
+                          "${c['chacra']} - Cuadro ${c['cuadro']} (${c['sup'] ?? 0} Ha)",
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (v) {
+                      if (v != null) {
+                        setModalState(() {
+                          codCuadroSeleccionado = v;
+                          cuadroActual = _cuadros.firstWhere(
+                            (c) => c['cod_cuadro'] == v,
                           );
-                        },
-                        child: const Center(
+                          haCtrl.text = "${cuadroActual['sup'] ?? ''}";
+                          calcularPlantasAuto();
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  _parCampos(
+                    DropdownButtonFormField<String>(
+                      value: cultivoSeleccionado,
+                      isExpanded: true,
+                      decoration: agroInputDecoration(
+                        label: "Cultivo",
+                        icono: Icons.eco_outlined,
+                      ),
+                      items: _cultivosVariedades.keys.map((cul) {
+                        return DropdownMenuItem<String>(
+                          value: cul,
+                          child: Text(cul, overflow: TextOverflow.ellipsis),
+                        );
+                      }).toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setModalState(() {
+                            cultivoSeleccionado = v;
+                            listaVariedades = _cultivosVariedades[v] ?? [];
+                            variedadSeleccionada = listaVariedades.first;
+                          });
+                        }
+                      },
+                    ),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey<String>('variedad_$cultivoSeleccionado'),
+                      value: variedadSeleccionada,
+                      isExpanded: true,
+                      decoration: agroInputDecoration(
+                        label: "Variedad",
+                        icono: Icons.nature_rounded,
+                      ),
+                      items: listaVariedades.map((vari) {
+                        return DropdownMenuItem<String>(
+                          value: vari,
                           child: Text(
-                            "Guardar Plantación",
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
+                            vari,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
+                        );
+                      }).toList(),
+                      onChanged: (v) => setModalState(
+                        () => variedadSeleccionada = v ?? listaVariedades.first,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 18),
+                  _tituloBloque('Marco de plantación'),
+                  _parCampos(
+                    TextFormField(
+                      controller: distFilaCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: agroInputDecoration(
+                        label: "Entre filas",
+                        icono: Icons.straighten_rounded,
+                        sufijo: 'm',
+                      ),
+                      onChanged: (_) => setModalState(calcularPlantasAuto),
+                    ),
+                    TextFormField(
+                      controller: distArbolCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: agroInputDecoration(
+                        label: "Entre plantas",
+                        icono: Icons.height_rounded,
+                        sufijo: 'm',
+                      ),
+                      onChanged: (_) => setModalState(calcularPlantasAuto),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _parCampos(
+                    TextFormField(
+                      controller: haCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: agroInputDecoration(
+                        label: "Superficie",
+                        icono: Icons.aspect_ratio_rounded,
+                        sufijo: 'ha',
+                      ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                      onChanged: (_) => setModalState(calcularPlantasAuto),
+                    ),
+                    TextFormField(
+                      controller: plantasCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: agroInputDecoration(
+                        label: "Total plantas",
+                        icono: Icons.forest_outlined,
+                        helper: "Se calcula según marco y superficie",
+                      ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                      onChanged: (_) => setModalState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AgroStatGrid(
+                    fondo: AgroTheme.colorBg,
+                    stats: [
+                      AgroStat(
+                        label: 'Marco',
+                        valor: marco > 0
+                            ? '${_fmtHa.format(marco)} m²'
+                            : '—',
+                        icono: Icons.grid_4x4_rounded,
+                      ),
+                      AgroStat(
+                        label: 'Densidad teórica',
+                        valor: densidad > 0
+                            ? '${_fmtEntero.format(densidad)} pl/ha'
+                            : '—',
+                        icono: Icons.scatter_plot_outlined,
+                      ),
+                      AgroStat(
+                        label: 'Densidad real',
+                        valor: haForm > 0 && plantasForm > 0
+                            ? '${_fmtEntero.format(plantasForm / haForm)} pl/ha'
+                            : '—',
+                        icono: Icons.forest_outlined,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  _tituloBloque('Datos complementarios'),
+                  _parCampos(
+                    TextFormField(
+                      controller: anoCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: agroInputDecoration(
+                        label: "Año de plantación",
+                        icono: Icons.event_note_rounded,
+                      ),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? "Obligatorio" : null,
+                    ),
+                    TextFormField(
+                      controller: upCtrl,
+                      decoration: agroInputDecoration(
+                        label: "UP (unidad productiva)",
+                        icono: Icons.badge_outlined,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: orientacionSeleccionada,
+                    isExpanded: true,
+                    decoration: agroInputDecoration(
+                      label: "Orientación de filas",
+                      icono: Icons.explore_outlined,
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                          value: "Norte - Sur",
+                          child: Text("Norte - Sur (Recomendada)")),
+                      DropdownMenuItem(
+                          value: "Este - Oeste", child: Text("Este - Oeste")),
+                      DropdownMenuItem(
+                          value: "Diagonal / Otra",
+                          child: Text("Diagonal / Otra")),
+                    ],
+                    onChanged: (v) => setModalState(
+                        () => orientacionSeleccionada = v ?? "Norte - Sur"),
+                  ),
+                  const SizedBox(height: 22),
+                  AgroButton(
+                    label: "Guardar plantación",
+                    icono: Icons.save_rounded,
+                    expandido: true,
+                    cargando: guardando,
+                    onTap: guardar,
+                  ),
+                ],
               ),
             );
           },
@@ -968,615 +1194,700 @@ class _InventarioPlantacionScreenState
     );
   }
 
+  // ============================================================
+  // OPCIONES DE CARGA
+  // ============================================================
+
   void _mostrarOpcionesCarga() {
-    showModalBottomSheet(
+    mostrarAgroPanel<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      backgroundColor: AgroTheme.colorSurface,
+      titulo: 'Cargar catastro agronómico',
+      subtitulo: 'Elegí qué nivel de detalle querés dar de alta',
+      icono: Icons.add_business_outlined,
       builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                "Cargar Catastro Agronómico",
-                style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16.5,
-                    color: AgroTheme.colorText),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                "Seleccioná qué nivel de detalle deseás dar de alta para el establecimiento:",
-                style: TextStyle(
-                    fontSize: 12.5, color: AgroTheme.colorTextSecondary),
-              ),
-              const SizedBox(height: 18),
-              ListTile(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                tileColor: AgroTheme.colorBg,
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFE8F5E9),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.grid_view_rounded, color: Color(0xFF2E7D32), size: 22),
-                ),
-                title: const Text("1. Nuevo Cuadro / Parcela",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                subtitle: const Text(
-                    "Define la parcela madre, riego, defensa y superficie total.",
-                    style: TextStyle(fontSize: 11.5)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 15),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _mostrarModalNuevoCuadro();
-                },
-              ),
-              const SizedBox(height: 10),
-              ListTile(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                tileColor: AgroTheme.colorBg,
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFFF8E1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.park_outlined, color: Color(0xFF8A6A1E), size: 22),
-                ),
-                title: const Text("2. Nuevo Cuartel de Plantación",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                subtitle: const Text(
-                    "Asigna especie, variedad, marco y densidad dentro de un cuadro.",
-                    style: TextStyle(fontSize: 11.5)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 15),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _mostrarModalNuevaPlantacion();
-                },
-              ),
-            ],
-          ),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AgroOptionTile(
+              icono: Icons.grid_view_rounded,
+              titulo: '1. Nuevo cuadro / parcela',
+              descripcion:
+                  'Define la parcela madre, riego, defensa y superficie total.',
+              color: AgroColors.ok,
+              onTap: () {
+                Navigator.pop(ctx);
+                _mostrarModalNuevoCuadro();
+              },
+            ),
+            AgroOptionTile(
+              icono: Icons.park_outlined,
+              titulo: '2. Nuevo cuartel de plantación',
+              descripcion: _cuadros.isEmpty
+                  ? 'Primero necesitás un cuadro: se abrirá el alta de cuadro.'
+                  : 'Asigna especie, variedad, marco y densidad dentro de un cuadro.',
+              color: AgroColors.warn,
+              onTap: () {
+                Navigator.pop(ctx);
+                _mostrarModalNuevaPlantacion();
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${_cuadros.length} ${_cuadros.length == 1 ? 'cuadro cargado' : 'cuadros cargados'} · ${_inventario.length} ${_inventario.length == 1 ? 'cuartel' : 'cuarteles'}',
+              textAlign: TextAlign.center,
+              style: AgroText.secundario,
+            ),
+          ],
         );
       },
     );
   }
 
+  // ============================================================
+  // FICHA TÉCNICA
+  // ============================================================
+
   void _mostrarFichaTecnicaParcela(Map<String, dynamic> item) {
-    final ha = double.tryParse(item['ha']?.toString() ?? '0') ?? 0.0;
+    final ha = _haDe(item);
     final ano = item['ano_plantacion'] ?? 'S/D';
     final edad = ano != 'S/D' && int.tryParse(ano.toString()) != null
         ? "${DateTime.now().year - int.parse(ano.toString())} años"
         : "S/D";
+    final plantas = _plantasDe(item);
+    final densidad = ha > 0 && plantas > 0 ? plantas / ha : 0.0;
+    final cultivo = (item['cultivo'] ?? 'General').toString();
 
-    showModalBottomSheet(
+    mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: "Ficha técnica · Cuadro ${item['cuadro'] ?? 'S/N'}",
+      subtitulo: "Chacra: ${item['chacra'] ?? 'S/D'} · UP: ${item['up'] ?? 'S/D'}",
+      icono: Icons.park_outlined,
       builder: (ctx) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.78,
-          decoration: const BoxDecoration(
-            color: AgroTheme.colorSurface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                AgroIconBox(
+                  icono: Icons.eco_rounded,
+                  color: _colorCultivo(cultivo),
+                  size: 42,
                 ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        "Ficha Técnica · Cuadro ${item['cuadro'] ?? 'S/N'}",
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 17.5,
-                            color: AgroTheme.colorText),
+                        "${item['variedad'] ?? 'S/D'}",
+                        style: AgroText.tituloCard,
                       ),
-                      Text(
-                        "Chacra: ${item['chacra']} · UP: ${item['up'] ?? 'S/D'}",
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: AgroTheme.colorTextSecondary,
-                            fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(ctx),
-                  ),
-                ],
-              ),
-              const Divider(color: AgroTheme.colorBorder),
-              const SizedBox(height: 12),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AgroTheme.colorBg,
-                          borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                          border: Border.all(color: AgroTheme.colorBorder),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _buildDetalleDato("Superficie", "${ha.toStringAsFixed(2)} Ha"),
-                            _buildDetalleDato("Variedad", "${item['variedad']}"),
-                            _buildDetalleDato("Especie", "${item['cultivo']}"),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      _buildFilaAtributo(Icons.date_range_rounded, "Año de Plantación", "$ano ($edad)"),
-                      _buildFilaAtributo(Icons.forest_rounded, "Cantidad de Plantas", "${item['plantas'] ?? 'S/D'} plantas"),
-                      _buildFilaAtributo(Icons.grid_4x4_rounded, "Marco de Plantación", "${item['dist_fila'] ?? '-'}m x ${item['dist_arbol'] ?? '-'}m"),
-                      _buildFilaAtributo(Icons.water_drop_outlined, "Sistema de Riego", "${item['sitema_riego'] ?? 'Goteo'}"),
-                      _buildFilaAtributo(Icons.shield_outlined, "Defensa Antigranizo / Helada", "${item['sistema_def'] ?? 'Ninguna'}"),
-                      _buildFilaAtributo(Icons.explore_outlined, "Orientación de Filas", "${item['orientacion'] ?? 'Norte - Sur'}"),
-                      _buildFilaAtributo(Icons.badge_outlined, "Unidad Productora (UP)", "${item['up'] ?? 'S/D'}"),
+                      Text(cultivo, style: AgroText.secundario),
                     ],
                   ),
                 ),
-              ),
-            ],
-          ),
+                AgroBadge(
+                  texto: '${_fmtHa.format(ha)} ha',
+                  grande: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            AgroStatGrid(
+              stats: [
+                AgroStat(
+                  label: 'Superficie',
+                  valor: '${ha.toStringAsFixed(2)} Ha',
+                  icono: Icons.aspect_ratio_rounded,
+                ),
+                AgroStat(
+                  label: 'Variedad',
+                  valor: "${item['variedad']}",
+                  icono: Icons.nature_rounded,
+                ),
+                AgroStat(
+                  label: 'Especie',
+                  valor: "${item['cultivo']}",
+                  icono: Icons.eco_outlined,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            AgroKeyValue(
+              icono: Icons.date_range_rounded,
+              clave: "Año de plantación",
+              valor: "$ano ($edad)",
+            ),
+            AgroKeyValue(
+              icono: Icons.forest_rounded,
+              clave: "Cantidad de plantas",
+              valor: "${item['plantas'] ?? 'S/D'} plantas",
+            ),
+            AgroKeyValue(
+              icono: Icons.scatter_plot_outlined,
+              clave: "Densidad",
+              valor: densidad > 0
+                  ? "${_fmtEntero.format(densidad)} pl/ha"
+                  : "S/D",
+            ),
+            AgroKeyValue(
+              icono: Icons.grid_4x4_rounded,
+              clave: "Marco de plantación",
+              valor:
+                  "${item['dist_fila'] ?? '-'}m x ${item['dist_arbol'] ?? '-'}m",
+            ),
+            AgroKeyValue(
+              icono: Icons.water_drop_outlined,
+              clave: "Sistema de riego",
+              valor: "${item['sitema_riego'] ?? 'Goteo'}",
+            ),
+            AgroKeyValue(
+              icono: Icons.shield_outlined,
+              clave: "Defensa antigranizo / helada",
+              valor: "${item['sistema_def'] ?? 'Ninguna'}",
+            ),
+            AgroKeyValue(
+              icono: Icons.explore_outlined,
+              clave: "Orientación de filas",
+              valor: "${item['orientacion'] ?? 'Norte - Sur'}",
+            ),
+            AgroKeyValue(
+              icono: Icons.badge_outlined,
+              clave: "Unidad productiva (UP)",
+              valor: "${item['up'] ?? 'S/D'}",
+            ),
+            const SizedBox(height: 16),
+            AgroButton(
+              label: 'Cerrar',
+              tipo: AgroButtonTipo.secundario,
+              expandido: true,
+              onTap: () => Navigator.pop(ctx),
+            ),
+          ],
         );
       },
     );
   }
 
-  Widget _buildDetalleDato(String titulo, String valor) {
-    return Column(
-      children: [
-        Text(titulo,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
-        const SizedBox(height: 3),
-        Text(valor,
-            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
-      ],
-    );
-  }
-
-  Widget _buildFilaAtributo(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: const Color(0xFF1E6B4C)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(label,
-                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
-          ),
-          Text(value,
-              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
-        ],
-      ),
-    );
-  }
+  // ============================================================
+  // UI
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
+    final esMovil = AgroBreakpoints.esMovil(context);
+    final filtrado = _inventarioFiltrado;
+    final bool puedeCargar = _puedeEditar && _selectedCodProductor != null;
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
-      appBar: AppBar(
-        backgroundColor: AgroTheme.colorSurface.withOpacity(0.92),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AgroTheme.colorText),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Inventario de Plantación",
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
-            ),
-            if (_selectedNombreProductor.isNotEmpty)
-              Text(
-                _selectedNombreProductor,
-                style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
-              ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.table_view_rounded, color: Color(0xFF2E7D32)),
-            tooltip: "Exportar a Excel",
-            onPressed: _inventarioFiltrado.isEmpty ? null : _exportarExcelInventario,
+      appBar: AgroAppBar(
+        titulo: "Inventario de plantación",
+        subtitulo: _selectedNombreProductor.isNotEmpty
+            ? _selectedNombreProductor
+            : null,
+        acciones: [
+          AgroIconButton(
+            icono: Icons.table_view_rounded,
+            tooltip: _exportando ? "Generando Excel…" : "Exportar a Excel",
+            color: AgroColors.ok,
+            onTap: filtrado.isEmpty || _exportando || _cargando
+                ? null
+                : _exportarExcelInventario,
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E6B4C)),
+          const SizedBox(width: 8),
+          AgroIconButton(
+            icono: Icons.refresh_rounded,
             tooltip: "Recargar",
-            onPressed: _cargarDatosCompletos,
+            color: AgroColors.primario,
+            onTap: _cargando || _selectedCodProductor == null
+                ? null
+                : _cargarDatosCompletos,
           ),
-          const SizedBox(width: 6),
         ],
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            if (_esIngenieroOAdmin && _productores.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                color: AgroTheme.colorSurface,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AgroTheme.colorBg,
-                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                    border: Border.all(color: AgroTheme.colorBorder),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<int>(
-                      value: _selectedCodProductor,
-                      isExpanded: true,
-                      style: const TextStyle(
-                          fontFamily: 'Roboto',
-                          color: AgroTheme.colorText,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13.5),
-                      items: _productores.map((p) {
-                        return DropdownMenuItem<int>(
-                          value: p['cod_productor'] as int,
-                          child: Text("${p['productor']} (CUIT: ${p['cuit'] ?? 'S/D'})",
-                              overflow: TextOverflow.ellipsis),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        if (val != null) {
-                          setState(() {
-                            _selectedCodProductor = val;
-                            _selectedNombreProductor =
-                                (_productores.firstWhere((p) => p['cod_productor'] == val)['productor'] ?? '').toString();
-                          });
-                          _cargarDatosCompletos();
-                        }
-                      },
+        top: false,
+        child: _cargando
+            ? const AgroLoading(mensaje: 'Cargando catastro de plantación…')
+            : RefreshIndicator(
+                color: AgroColors.primario,
+                onRefresh: _cargarDatosCompletos,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(top: 16, bottom: 110),
+                  child: AgroContent(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildTarjetaProductor(esMovil),
+                        const SizedBox(height: 16),
+                        if (_selectedCodProductor == null)
+                          const AgroEmptyState(
+                            icono: Icons.person_off_outlined,
+                            titulo: 'No hay productores activos',
+                            mensaje:
+                                'Sincronizá los datos o dá de alta un productor para gestionar su plantación.',
+                          )
+                        else ...[
+                          _buildKpis(filtrado),
+                          const SizedBox(height: 18),
+                          if (_inventario.isNotEmpty) ...[
+                            _buildFiltros(),
+                            const SizedBox(height: 12),
+                            _buildResumenFiltro(filtrado),
+                            const SizedBox(height: 6),
+                          ],
+                          if (_inventario.isEmpty)
+                            _buildVacioInicial(puedeCargar)
+                          else if (filtrado.isEmpty)
+                            AgroEmptyState(
+                              icono: Icons.search_off_rounded,
+                              titulo: 'Sin resultados',
+                              mensaje:
+                                  'Ningún cuartel coincide con la chacra o la búsqueda. Probá con otros filtros.',
+                              accion: AgroButton(
+                                label: 'Limpiar filtros',
+                                icono: Icons.filter_alt_off_rounded,
+                                tipo: AgroButtonTipo.secundario,
+                                onTap: _limpiarFiltros,
+                              ),
+                            )
+                          else
+                            _buildListado(filtrado),
+                        ],
+                      ],
                     ),
                   ),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AgroTheme.colorSurface,
-                  borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
-                  border: Border.all(color: AgroTheme.colorBorder),
-                  boxShadow: const [
-                    BoxShadow(color: Color(0x06141E18), blurRadius: 10, offset: Offset(0, 3)),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildKpiItem("Superficie", "${_superficieTotal.toStringAsFixed(1)} Ha", Icons.terrain_rounded),
-                    Container(height: 28, width: 1, color: AgroTheme.colorBorder),
-                    _buildKpiItem("Plantas", NumberFormat.compact().format(_plantasTotales), Icons.park_outlined),
-                    Container(height: 28, width: 1, color: AgroTheme.colorBorder),
-                    _buildKpiItem("Densidad", "${_densidadPromedio.toStringAsFixed(0)} Pl/Ha", Icons.scatter_plot_outlined),
-                  ],
-                ),
-              ),
-            ),
-            if (_chacrasDisponibles.length > 1)
-              Container(
-                height: 38,
-                margin: const EdgeInsets.symmetric(vertical: 6),
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: _chacrasDisponibles.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, idx) {
-                    final ch = _chacrasDisponibles[idx];
-                    final isSelected = _chacraSeleccionada == ch;
-
-                    return ChoiceChip(
-                      label: Text(ch == "TODAS" ? "Todas las Chacras" : ch),
-                      selected: isSelected,
-                      selectedColor: const Color(0xFF1E6B4C),
-                      labelStyle: TextStyle(
-                        fontSize: 12,
-                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-                        color: isSelected ? Colors.white : AgroTheme.colorText,
-                      ),
-                      backgroundColor: AgroTheme.colorSurface,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(color: isSelected ? const Color(0xFF1E6B4C) : AgroTheme.colorBorder),
-                      ),
-                      onSelected: (selected) {
-                        if (selected) {
-                          setState(() => _chacraSeleccionada = ch);
-                        }
-                      },
-                    );
-                  },
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: AgroTheme.colorSurface,
-                  borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                  border: Border.all(color: AgroTheme.colorBorder),
-                ),
-                child: TextField(
-                  controller: _searchCtrl,
-                  onChanged: (val) => setState(() => _filtroTexto = val),
-                  style: const TextStyle(color: AgroTheme.colorText, fontSize: 13.5),
-                  decoration: const InputDecoration(
-                    hintText: "Buscar por cuadro, variedad, cultivo o UP...",
-                    hintStyle: TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 12.5),
-                    prefixIcon: Icon(Icons.search_rounded, color: AgroTheme.colorTextSecondary, size: 18),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: _cargando
-                  ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
-                  : _inventarioFiltrado.isEmpty
-                      ? Center(
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.all(28.0),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(20),
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFFE8F5E9),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(Icons.nature_people_rounded, size: 54, color: Color(0xFF2E7D32)),
-                                ),
-                                const SizedBox(height: 16),
-                                const Text(
-                                  "Sin Plantaciones Registradas",
-                                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17, color: AgroTheme.colorText),
-                                ),
-                                const SizedBox(height: 8),
-                                const Text(
-                                  "Tu establecimiento no cuenta aún con cuarteles cargados.\nPodes registrar tu primer cuadro y cuartel de plantación ahora mismo.",
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary, height: 1.4),
-                                ),
-                                const SizedBox(height: 24),
-                                if (_puedeEditar)
-                                  SizedBox(
-                                    width: 240,
-                                    height: 48,
-                                    child: SoftButton(
-                                      borderRadius: 24,
-                                      onTap: _mostrarOpcionesCarga,
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: const [
-                                          Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 18),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            "Cargar Mi Primer Cuadro",
-                                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13.5),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(20, 6, 20, 85),
-                          itemCount: _inventarioFiltrado.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, idx) {
-                            final item = _inventarioFiltrado[idx];
-                            return _ParcelaCard(
-                              item: item,
-                              onTap: () => _mostrarFichaTecnicaParcela(item),
-                            );
-                          },
-                        ),
-            ),
-          ],
-        ),
       ),
-      floatingActionButton: _puedeEditar
-          ? SoftButton(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              borderRadius: 28,
-              onTap: _mostrarOpcionesCarga,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: const [
-                  Icon(Icons.add_rounded, color: Colors.white, size: 22),
-                  SizedBox(width: 6),
-                  Text(
-                    "Cargar Parcela / Plantación",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14),
-                  ),
-                ],
+      floatingActionButton: puedeCargar && !_cargando
+          ? FloatingActionButton.extended(
+              onPressed: _mostrarOpcionesCarga,
+              backgroundColor: AgroColors.primario,
+              foregroundColor: Colors.white,
+              elevation: 3,
+              icon: const Icon(Icons.add_rounded),
+              label: Text(
+                esMovil ? "Cargar" : "Cargar parcela / plantación",
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             )
           : null,
     );
   }
 
-  Widget _buildKpiItem(String titulo, String valor, IconData icon) {
+  Widget _buildTarjetaProductor(bool esMovil) {
+    final bool puedeCambiar = _esIngenieroOAdmin && _productores.isNotEmpty;
+    final String nombre = _selectedNombreProductor.isNotEmpty
+        ? _selectedNombreProductor
+        : (_esIngenieroOAdmin ? 'Sin productor seleccionado' : 'Mi establecimiento');
+    final String? cuit = _productorInfo?['cuit']?.toString();
+    final String? localidad = _productorInfo?['localidad']?.toString();
+    final List<String> detalles = [
+      if (cuit != null && cuit.isNotEmpty) 'CUIT $cuit',
+      if (localidad != null && localidad.isNotEmpty) localidad,
+    ];
+
+    return AgroCard(
+      onTap: puedeCambiar ? _abrirSelectorProductor : null,
+      accentColor: AgroColors.primario,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          const AgroIconBox(icono: Icons.agriculture_rounded, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _esIngenieroOAdmin ? 'PRODUCTOR EN GESTIÓN' : 'MI ESTABLECIMIENTO',
+                  style: AgroText.overline,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  nombre,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                    color: AgroTheme.colorText,
+                  ),
+                ),
+                if (detalles.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    detalles.join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AgroText.secundario,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (puedeCambiar) ...[
+            const SizedBox(width: 8),
+            if (esMovil)
+              const Icon(Icons.unfold_more_rounded,
+                  color: AgroTheme.colorTextSecondary)
+            else
+              const AgroBadge(
+                texto: 'Cambiar',
+                icono: Icons.swap_horiz_rounded,
+                grande: true,
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKpis(List<Map<String, dynamic>> filtrado) {
+    final double sup = _superficieDe(filtrado);
+    final int plantas = _plantasTotalesDe(filtrado);
+    final double densidad = sup > 0 ? plantas / sup : 0.0;
+    final int variedades = filtrado
+        .map((e) => (e['variedad'] ?? '').toString().trim())
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .length;
+    final int cultivos = filtrado
+        .map((e) => (e['cultivo'] ?? '').toString().trim())
+        .where((v) => v.isNotEmpty)
+        .toSet()
+        .length;
+
+    return AgroKpiGrid(
+      maxColumnas: 5,
+      anchoMinimo: 150,
+      kpis: [
+        AgroKpiTile(
+          label: 'Superficie',
+          valor: '${_fmtHa.format(sup)} ha',
+          icono: Icons.terrain_rounded,
+          color: AgroColors.primario,
+        ),
+        AgroKpiTile(
+          label: 'Plantas',
+          valor: _fmtEntero.format(plantas),
+          icono: Icons.forest_outlined,
+          color: AgroColors.ok,
+        ),
+        AgroKpiTile(
+          label: 'Densidad media',
+          valor: _fmtEntero.format(densidad),
+          detalle: 'plantas / ha',
+          icono: Icons.scatter_plot_outlined,
+          color: AgroColors.info,
+        ),
+        AgroKpiTile(
+          label: 'Cuarteles',
+          valor: '${filtrado.length}',
+          detalle: '${_cuadros.length} cuadros en total',
+          icono: Icons.grid_view_rounded,
+          color: AgroColors.warn,
+        ),
+        AgroKpiTile(
+          label: 'Variedades',
+          valor: '$variedades',
+          detalle: '$cultivos ${cultivos == 1 ? 'especie' : 'especies'}',
+          icono: Icons.nature_rounded,
+          color: const Color(0xFF6A1B9A),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFiltros() {
+    final opcionesChacra =
+        _chacrasDisponibles.where((c) => c != "TODAS").toList();
+
+    return LayoutBuilder(
+      builder: (context, c) {
+        final buscador = AgroSearchField(
+          controller: _searchCtrl,
+          hint: "Buscar por cuadro, variedad, cultivo o UP…",
+          onChanged: (val) => setState(() => _filtroTexto = val),
+        );
+
+        final Widget? chips = opcionesChacra.isEmpty
+            ? null
+            : AgroChipSelector(
+                label: 'Chacra',
+                opciones: opcionesChacra,
+                valor: _chacraSeleccionada == "TODAS"
+                    ? null
+                    : _chacraSeleccionada,
+                textoTodos: 'Todas',
+                onChanged: (v) =>
+                    setState(() => _chacraSeleccionada = v ?? "TODAS"),
+              );
+
+        if (chips != null && c.maxWidth >= 760) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(flex: 5, child: buscador),
+              const SizedBox(width: 16),
+              Expanded(flex: 6, child: chips),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            buscador,
+            if (chips != null) ...[
+              const SizedBox(height: 12),
+              chips,
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildResumenFiltro(List<Map<String, dynamic>> filtrado) {
+    final String texto = _hayFiltros
+        ? 'Mostrando ${filtrado.length} de ${_inventario.length} cuarteles'
+        : '${_inventario.length} ${_inventario.length == 1 ? 'cuartel registrado' : 'cuarteles registrados'}';
     return Row(
       children: [
-        Icon(icon, size: 20, color: const Color(0xFF1E6B4C)),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        Expanded(
+          child: Text(
+            texto,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AgroText.label,
+          ),
+        ),
+        if (_hayFiltros)
+          AgroButton(
+            label: 'Limpiar filtros',
+            icono: Icons.filter_alt_off_rounded,
+            tipo: AgroButtonTipo.texto,
+            compacto: true,
+            onTap: _limpiarFiltros,
+          )
+        else
+          const SizedBox(height: 38),
+      ],
+    );
+  }
+
+  Widget _buildVacioInicial(bool puedeCargar) {
+    final String mensaje = _cuadros.isEmpty
+        ? "Este establecimiento no cuenta aún con cuarteles cargados.\nPodés registrar el primer cuadro y su plantación ahora mismo."
+        : "Hay ${_cuadros.length} ${_cuadros.length == 1 ? 'cuadro cargado' : 'cuadros cargados'} sin cuarteles de plantación.\nAsigná especie y variedad para completar el catastro.";
+    return AgroEmptyState(
+      icono: Icons.nature_people_rounded,
+      titulo: "Sin plantaciones registradas",
+      mensaje: mensaje,
+      accion: puedeCargar
+          ? AgroButton(
+              label: _cuadros.isEmpty
+                  ? "Cargar mi primer cuadro"
+                  : "Cargar plantación",
+              icono: Icons.add_circle_outline_rounded,
+              onTap: _mostrarOpcionesCarga,
+            )
+          : null,
+    );
+  }
+
+  Widget _buildListado(List<Map<String, dynamic>> filtrado) {
+    final Map<String, List<Map<String, dynamic>>> grupos = {};
+    for (final it in filtrado) {
+      final ch = (it['chacra'] ?? '').toString().trim();
+      grupos
+          .putIfAbsent(ch.isEmpty ? 'Sin chacra' : ch,
+              () => <Map<String, dynamic>>[])
+          .add(it);
+    }
+
+    return LayoutBuilder(
+      builder: (context, c) {
+        final int cols = c.maxWidth >= 700 ? 2 : 1;
+        const double gap = 12;
+        final double w =
+            ((c.maxWidth - gap * (cols - 1)) / cols).floorToDouble();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(titulo,
-                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
-            Text(valor,
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
+            for (final e in grupos.entries) ...[
+              const SizedBox(height: 12),
+              _buildHeaderChacra(e.key, e.value),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: e.value
+                    .map((it) => SizedBox(
+                          width: w,
+                          child: _CuartelCard(
+                            item: it,
+                            onTap: () => _mostrarFichaTecnicaParcela(it),
+                          ),
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 8),
+            ],
           ],
+        );
+      },
+    );
+  }
+
+  Widget _buildHeaderChacra(String chacra, List<Map<String, dynamic>> items) {
+    final double sup = _superficieDe(items);
+    return Row(
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: AgroColors.primarioSoft,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: const Icon(Icons.terrain_rounded,
+              size: 17, color: AgroColors.primario),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            chacra,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.2,
+              color: AgroTheme.colorText,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        AgroBadge(
+          texto:
+              '${_fmtHa.format(sup)} ha · ${items.length} ${items.length == 1 ? 'cuartel' : 'cuarteles'}',
+          color: AgroColors.neutral,
+          fondo: AgroColors.neutralSoft,
         ),
       ],
     );
   }
 }
 
-class _ParcelaCard extends StatefulWidget {
+// ============================================================
+// TARJETA DE CUARTEL
+// ============================================================
+
+class _CuartelCard extends StatelessWidget {
   final Map<String, dynamic> item;
   final VoidCallback onTap;
 
-  const _ParcelaCard({
+  const _CuartelCard({
     required this.item,
     required this.onTap,
   });
 
   @override
-  State<_ParcelaCard> createState() => _ParcelaCardState();
-}
-
-class _ParcelaCardState extends State<_ParcelaCard> {
-  bool _isPressed = false;
-
-  @override
   Widget build(BuildContext context) {
-    final item = widget.item;
-    final ha = double.tryParse(item['ha']?.toString() ?? '0') ?? 0.0;
-    final variedad = item['variedad'] ?? 'S/D';
-    final cultivo = item['cultivo'] ?? 'General';
-    final ano = item['ano_plantacion'] ?? 'S/D';
-    final riego = item['sitema_riego'] ?? 'S/D';
-    final plantas = item['plantas'] ?? '0';
+    final ha = _haDe(item);
+    final plantasNum = _plantasDe(item);
+    final variedad = (item['variedad'] ?? 'S/D').toString();
+    final cultivo = (item['cultivo'] ?? 'General').toString();
+    final ano = (item['ano_plantacion'] ?? 'S/D').toString();
+    final riego = (item['sitema_riego'] ?? 'S/D').toString();
+    final up = (item['up'] ?? '').toString().trim();
+    final densidad = ha > 0 && plantasNum > 0 ? plantasNum / ha : 0.0;
+    final color = _colorCultivo(cultivo);
 
-    return GestureDetector(
-      onTapDown: (_) => setState(() => _isPressed = true),
-      onTapUp: (_) => setState(() => _isPressed = false),
-      onTapCancel: () => setState(() => _isPressed = false),
-      onTap: widget.onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        transform: Matrix4.identity()..scale(_isPressed ? 0.985 : 1.0),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _isPressed ? AgroTheme.colorActiveBg : AgroTheme.colorSurface,
-          borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
-          border: Border.all(
-            color: _isPressed ? AgroTheme.colorActiveBorder : AgroTheme.colorBorder,
-            width: 1.2,
-          ),
-          boxShadow: const [
-            BoxShadow(color: Color(0x04141E18), blurRadius: 8, offset: Offset(0, 2)),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
+    return AgroCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              AgroIconBox(icono: Icons.eco_rounded, color: color, size: 40),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE8F5E9),
-                        borderRadius: BorderRadius.circular(7),
-                      ),
-                      child: Text(
-                        "Cuadro ${item['cuadro'] ?? ''}",
-                        style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w800, fontSize: 12),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
                     Text(
-                      "${item['chacra'] ?? ''}",
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AgroTheme.colorText),
+                      variedad,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AgroText.tituloCard,
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      up.isEmpty ? cultivo : '$cultivo · $up',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AgroText.secundario,
                     ),
                   ],
                 ),
-                Text(
-                  "${ha.toStringAsFixed(2)} Ha",
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: Color(0xFF1E6B4C)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Text(
-                  "$variedad ",
-                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText),
-                ),
-                Text(
-                  "($cultivo)",
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: AgroTheme.colorBg,
-                borderRadius: BorderRadius.circular(8),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _buildMiniTag("Plantación", "$ano"),
-                  _buildMiniTag("Plantas", "$plantas"),
-                  _buildMiniTag("Riego", "$riego"),
-                  const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: AgroTheme.colorTextSecondary),
+                  Text(
+                    '${_fmtHa.format(ha)} ha',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: AgroColors.primario,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  AgroBadge(texto: 'Cuadro ${item['cuadro'] ?? ''}'),
                 ],
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          AgroStatGrid(
+            stats: [
+              AgroStat(
+                label: 'Plantación',
+                valor: ano,
+                icono: Icons.event_note_rounded,
+              ),
+              AgroStat(
+                label: 'Plantas',
+                valor: plantasNum > 0 ? _fmtEntero.format(plantasNum) : '0',
+                icono: Icons.forest_outlined,
+              ),
+              AgroStat(
+                label: 'Densidad',
+                valor: densidad > 0
+                    ? '${_fmtEntero.format(densidad)} pl/ha'
+                    : 'S/D',
+                icono: Icons.scatter_plot_outlined,
+              ),
+              AgroStat(
+                label: 'Riego',
+                valor: riego,
+                icono: Icons.water_drop_outlined,
+              ),
+            ],
+          ),
+        ],
       ),
-    );
-  }
-
-  Widget _buildMiniTag(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w600, color: AgroTheme.colorTextSecondary)),
-        Text(value,
-            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: AgroTheme.colorText)),
-      ],
     );
   }
 }

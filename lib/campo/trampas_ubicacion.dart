@@ -1,20 +1,33 @@
+// ignore_for_file: deprecated_member_use
 import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, FilteringTextInputFormatter;
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
-import '../widgets/soft_button.dart';
+import '../widgets/agro_reportes_ui.dart';
+import '../widgets/agro_ui.dart';
+
+/// Color de referencia por plaga. Coincide con el color de los pines del
+/// mapa satelital (ver [_MapaTrampasViewState._getHueForPlaga]).
+Color _colorPlaga(String plagaRaw) {
+  final p = plagaRaw.toUpperCase();
+  if (p.contains("CARPO")) return Colors.red;
+  if (p.contains("GRAFO")) return Colors.orange;
+  if (p.contains("MOSCA")) return Colors.yellow.shade700;
+  if (p.contains("PSILIDO") || p.contains("PERA")) return Colors.cyan;
+  return Colors.purple;
+}
 
 class TrampasUbicacionScreen extends StatefulWidget {
   final int codProductor;
@@ -31,6 +44,16 @@ class TrampasUbicacionScreen extends StatefulWidget {
 }
 
 class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
+  static const int _umbral = 5;
+
+  /// Valor guardado en la base / texto visible en el selector.
+  static const List<List<String>> _opcionesPlaga = [
+    ["CARPOCAPSA (Cydia pomonella)", "Carpocapsa (Delta con Feromona)"],
+    ["GRAFOLITA (Grapholita molesta)", "Grafolita (Delta con Feromona)"],
+    ["MOSCA DE LOS FRUTOS (Ceratitis)", "Mosca de los Frutos (Jackson/Polillero)"],
+    ["PSILIDO DE LA PERA (Cacopsylla)", "Psílido del Peral (Placa Amarilla)"],
+  ];
+
   bool _cargando = true;
   String _userName = "Operario";
 
@@ -46,23 +69,23 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
     _cargarDatos();
   }
 
-  Future<void> _cargarDatos() async {
-    setState(() => _cargando = true);
+  Future<void> _cargarDatos({bool silencioso = false}) async {
+    if (!silencioso) setState(() => _cargando = true);
     final prefs = await SharedPreferences.getInstance();
     _userName = prefs.getString('userName') ?? "Operario";
     final db = await DatabaseHelper.instance.database;
 
     final List<Map<String, dynamic>> trampas = await db.rawQuery('''
-      SELECT 
-        cod_trampa, 
-        trampa_numero, 
-        tipo_trampa, 
-        sector as chacra, 
-        cuadro, 
-        fila, 
-        variedad, 
-        cultivo, 
-        ubicacion, 
+      SELECT
+        cod_trampa,
+        trampa_numero,
+        tipo_trampa,
+        sector as chacra,
+        cuadro,
+        fila,
+        variedad,
+        cultivo,
+        ubicacion,
         url_evidencia,
         created_at
       FROM lecturas_trampas
@@ -81,6 +104,9 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
     setState(() {
       _todasTrampas = trampas;
       _chacrasDisponibles = chacrasSet.toList();
+      if (!_chacrasDisponibles.contains(_chacraSeleccionada)) {
+        _chacraSeleccionada = "TODAS";
+      }
       _cargando = false;
     });
   }
@@ -92,8 +118,56 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
         .toList();
   }
 
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  bool _tieneGps(Map<String, dynamic> t) {
+    final u = t['ubicacion']?.toString() ?? '';
+    return u.contains(',') && u.split(',').length >= 2;
+  }
+
+  int _totalLectura(Map<String, dynamic> l) {
+    final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
+    final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
+    final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
+    return m + hv + hg;
+  }
+
+  Color _colorCaptura(int total) {
+    if (total >= _umbral) return AgroColors.danger;
+    if (total >= _umbral - 2) return AgroColors.warn;
+    return AgroColors.ok;
+  }
+
+  Color _fondoCaptura(int total) {
+    if (total >= _umbral) return AgroColors.dangerSoft;
+    if (total >= _umbral - 2) return AgroColors.warnSoft;
+    return AgroColors.okSoft;
+  }
+
+  String _fmtFecha(String? raw) {
+    if (raw == null || raw.isEmpty) return '—';
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw.split('T').first;
+    return DateFormat('dd/MM/yyyy').format(dt);
+  }
+
+  Widget _punto(Color color, {double size = 10}) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 1.5),
+          boxShadow: [
+            BoxShadow(color: color.withOpacity(0.35), blurRadius: 3),
+          ],
+        ),
+      );
+
   // ==========================================================================
-  // 🗺️ PANTALLA COMPLETA DE MAPA SATELITAL CON PINS POR PLAGA Y DETALLE
+  // MAPA SATELITAL CON PINS POR PLAGA
   // ==========================================================================
   void _abrirMapaGlobalTrampas() {
     final trampasConGps = _trampasFiltradas.where((t) {
@@ -102,12 +176,9 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
     }).toList();
 
     if (trampasConGps.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: AgroTheme.colorDanger,
-          content: Text('No hay trampas con coordenadas GPS válidas en este sector.'),
-        ),
-      );
+      mostrarAgroSnack(
+          context, 'No hay trampas con coordenadas GPS válidas en este sector.',
+          tipo: AgroSnackTipo.error);
       return;
     }
 
@@ -124,9 +195,9 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
   }
 
   // ==========================================================================
-  // 💡 FORMULARIO MODAL: UBICAR TRAMPA (QR + GPS + CÁMARA)
+  // FORMULARIO: UBICAR / INSTALAR TRAMPA (QR + GPS + CÁMARA)
   // ==========================================================================
-  void _abrirModalInstalarTrampa() async {
+  Future<void> _abrirModalInstalarTrampa() async {
     final db = await DatabaseHelper.instance.database;
 
     final List<Map<String, dynamic>> cuarteles = await db.query(
@@ -140,12 +211,9 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
 
     if (cuarteles.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: AgroTheme.colorDanger,
-            content: Text('No hay cuarteles registrados en el inventario para este productor.'),
-          ),
-        );
+        mostrarAgroSnack(context,
+            'No hay cuarteles registrados en el inventario para este productor.',
+            tipo: AgroSnackTipo.error);
       }
       return;
     }
@@ -161,394 +229,359 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
     final filaCtrl = TextEditingController(text: "1");
     String gpsCoords = "";
     bool capturandoGps = false;
-    File? fotoEvidenciaTrampa;
+    bool guardando = false;
+    bool panelAbierto = true;
+    String? rutaFotoEvidenciaTrampa;
 
     if (!mounted) return;
 
-    showModalBottomSheet(
+    await mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: 'Ubicar trampa de plagas',
+      subtitulo: 'Registrá la instalación con código, GPS y foto',
+      icono: Icons.add_location_alt_rounded,
+      maxWidth: 580,
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Container(
-              height: MediaQuery.of(context).size.height * 0.90,
-              decoration: const BoxDecoration(
-                color: AgroTheme.colorSurface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              padding: EdgeInsets.only(
-                top: 18,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 18,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+          builder: (sbCtx, setModalState) {
+            Future<void> guardar() async {
+              if (nroTrampaCtrl.text.trim().isEmpty) {
+                mostrarAgroSnack(sbCtx, 'Ingresá el número o escaneá el QR',
+                    tipo: AgroSnackTipo.aviso);
+                return;
+              }
+
+              setModalState(() => guardando = true);
+              try {
+                final ahora = DateTime.now();
+                final String nro = nroTrampaCtrl.text.trim();
+                final String cod = "TRP_${widget.codProductor}_$nro";
+                final String idReg = "LOC_${ahora.millisecondsSinceEpoch}";
+
+                await db.insert('lecturas_trampas', {
+                  'id': cod,
+                  'id_reg': idReg,
+                  'created_at': ahora.toIso8601String(),
+                  'establecimiento': widget.nombreProductor,
+                  'sector': cuartelSelec['chacra'] ?? '',
+                  'cuadro': cuartelSelec['cuadro'] ?? '',
+                  'cultivo': cuartelSelec['cultivo'] ?? '',
+                  'variedad': cuartelSelec['variedad'] ?? '',
+                  'fila': filaCtrl.text.trim(),
+                  'ubicacion': gpsCoords,
+                  'tipo_trampa': tipoPlaga,
+                  'cod_trampa': cod,
+                  'usuario': _userName,
+                  'trampa_numero': nro,
+                  'semana': "INSTALACION",
+                  'temporada': "${ahora.year}",
+                  'macho': "0",
+                  'hembra_virgen': "0",
+                  'hembra_gravida': "0",
+                  'url_evidencia': rutaFotoEvidenciaTrampa,
+                  'cod_establecimiento': widget.codProductor,
+                  'sincronizado': 0,
+                });
+
+                if (ctx.mounted) Navigator.pop(ctx);
+                _cargarDatos(silencioso: true);
+                if (mounted) {
+                  mostrarAgroSnack(context, 'Trampa ubicada con éxito',
+                      tipo: AgroSnackTipo.ok);
+                }
+              } catch (e) {
+                if (panelAbierto) setModalState(() => guardando = false);
+                if (sbCtx.mounted) {
+                  mostrarAgroSnack(sbCtx, 'No se pudo guardar la trampa: $e',
+                      tipo: AgroSnackTipo.error);
+                }
+              }
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('UBICACIÓN EN EL MONTE', style: AgroText.overline),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: claveCuartelSeleccionado,
+                  isExpanded: true,
+                  decoration: agroInputDecoration(
+                    label: 'Chacra y cuadro',
+                    icono: Icons.grid_view_rounded,
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Ubicar Trampa de Plagas",
-                        style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 16.5,
-                            color: AgroTheme.colorText),
+                  items: cuarteles.map((c) {
+                    final clave = generarClave(c);
+                    return DropdownMenuItem<String>(
+                      value: clave,
+                      child: Text(
+                        "${c['chacra']} · Cuadro ${c['cuadro']} (${c['variedad']})",
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          color: AgroTheme.colorText,
+                        ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 22),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
+                    );
+                  }).toList(),
+                  onChanged: (nuevaClave) {
+                    if (nuevaClave != null) {
+                      setModalState(() {
+                        claveCuartelSeleccionado = nuevaClave;
+                        cuartelSelec = cuarteles.firstWhere(
+                          (c) => generarClave(c) == nuevaClave,
+                        );
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: filaCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: agroInputDecoration(
+                    label: 'Fila / hilera',
+                    icono: Icons.straighten_rounded,
                   ),
-                  const Divider(color: AgroTheme.colorBorder),
-                  const SizedBox(height: 8),
-
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        children: [
-                          DropdownButtonFormField<String>(
-                            value: claveCuartelSeleccionado,
-                            isExpanded: true,
-                            decoration: _inputDecoration("Chacra y Cuadro"),
-                            items: cuarteles.map((c) {
-                              final clave = generarClave(c);
-                              return DropdownMenuItem<String>(
-                                value: clave,
-                                child: Text(
-                                  "${c['chacra']} · Cuadro ${c['cuadro']} (${c['variedad']})",
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                                ),
-                              );
-                            }).toList(),
-                            onChanged: (nuevaClave) {
-                              if (nuevaClave != null) {
-                                setModalState(() {
-                                  claveCuartelSeleccionado = nuevaClave;
-                                  cuartelSelec = cuarteles.firstWhere(
-                                    (c) => generarClave(c) == nuevaClave,
-                                  );
-                                });
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 12),
-
-                          DropdownButtonFormField<String>(
-                            value: tipoPlaga,
-                            isExpanded: true,
-                            decoration: _inputDecoration("Plaga / Tipo de Trampa"),
-                            items: const [
-                              DropdownMenuItem(
-                                  value: "CARPOCAPSA (Cydia pomonella)",
-                                  child: Text("Carpocapsa (Delta con Feromona)")),
-                              DropdownMenuItem(
-                                  value: "GRAFOLITA (Grapholita molesta)",
-                                  child: Text("Grafolita (Delta con Feromona)")),
-                              DropdownMenuItem(
-                                  value: "MOSCA DE LOS FRUTOS (Ceratitis)",
-                                  child: Text("Mosca de los Frutos (Jackson/Polillero)")),
-                              DropdownMenuItem(
-                                  value: "PSILIDO DE LA PERA (Cacopsylla)",
-                                  child: Text("Psílido del Peral (Placa Amarilla)")),
-                            ],
-                            onChanged: (v) {
-                              if (v != null) setModalState(() => tipoPlaga = v);
-                            },
-                          ),
-                          const SizedBox(height: 12),
-
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextFormField(
-                                  controller: nroTrampaCtrl,
-                                  keyboardType: TextInputType.text,
-                                  decoration: _inputDecoration("N° o Código de Trampa"),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              InkWell(
-                                onTap: () => _abrirEscannerQR((codigoLeido) {
-                                  setModalState(() {
-                                    nroTrampaCtrl.text = codigoLeido;
-                                  });
-                                }),
-                                borderRadius: BorderRadius.circular(12),
-                                child: Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: AgroTheme.colorAccentSoft,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AgroTheme.colorAccent),
-                                  ),
-                                  child: const Icon(Icons.qr_code_scanner_rounded,
-                                      color: AgroTheme.colorAccentDark, size: 22),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-
-                          TextFormField(
-                            controller: filaCtrl,
-                            keyboardType: TextInputType.number,
-                            decoration: _inputDecoration("Fila / Hilera"),
-                          ),
-                          const SizedBox(height: 14),
-
-                          // Coordenadas GPS
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AgroTheme.colorBg,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: AgroTheme.colorBorder),
-                            ),
+                ),
+                const SizedBox(height: 18),
+                const Text('TRAMPA', style: AgroText.overline),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: tipoPlaga,
+                  isExpanded: true,
+                  decoration: agroInputDecoration(
+                    label: 'Plaga / tipo de trampa',
+                    icono: Icons.bug_report_outlined,
+                  ),
+                  items: _opcionesPlaga
+                      .map((o) => DropdownMenuItem<String>(
+                            value: o[0],
                             child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.my_location_rounded,
-                                        color: Color(0xFFB8862A), size: 20),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      gpsCoords.isNotEmpty
-                                          ? "GPS: $gpsCoords"
-                                          : "Sin coordenadas fijadas",
-                                      style: const TextStyle(
-                                          fontSize: 12, fontWeight: FontWeight.w600),
+                                _punto(_colorPlaga(o[0])),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    o[1],
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: AgroTheme.colorText,
                                     ),
-                                  ],
-                                ),
-                                TextButton(
-                                  onPressed: capturandoGps
-                                      ? null
-                                      : () async {
-                                          setModalState(() => capturandoGps = true);
-                                          try {
-                                            LocationPermission perm =
-                                                await Geolocator.checkPermission();
-                                            if (perm == LocationPermission.denied) {
-                                              perm = await Geolocator.requestPermission();
-                                            }
-                                            final pos = await Geolocator.getCurrentPosition();
-                                            setModalState(() {
-                                              gpsCoords =
-                                                  "${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}";
-                                            });
-                                          } catch (e) {
-                                            if (context.mounted) {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(content: Text('Error GPS: $e')),
-                                              );
-                                            }
-                                          }
-                                          setModalState(() => capturandoGps = false);
-                                        },
-                                  child: capturandoGps
-                                      ? const SizedBox(
-                                          width: 14,
-                                          height: 14,
-                                          child: CircularProgressIndicator(strokeWidth: 2))
-                                      : const Text(
-                                          "Fijar Posición",
-                                          style: TextStyle(
-                                              fontWeight: FontWeight.w800,
-                                              color: Color(0xFFB8862A)),
-                                        ),
+                                  ),
                                 ),
                               ],
                             ),
-                          ),
-                          const SizedBox(height: 12),
-
-                          // Cámara
-                          InkWell(
-                            onTap: () async {
-                              try {
-                                final XFile? foto = await _picker.pickImage(
-                                  source: ImageSource.camera,
-                                  imageQuality: 75,
-                                  maxWidth: 1280,
-                                );
-                                if (foto != null) {
-                                  setModalState(() {
-                                    fotoEvidenciaTrampa = File(foto.path);
-                                  });
-                                }
-                              } catch (_) {}
-                            },
-                            borderRadius: BorderRadius.circular(12),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                              decoration: BoxDecoration(
-                                color: fotoEvidenciaTrampa != null
-                                    ? AgroTheme.colorAccentSoft
-                                    : AgroTheme.colorBg,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: fotoEvidenciaTrampa != null
-                                      ? AgroTheme.colorAccent
-                                      : AgroTheme.colorBorder,
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.camera_alt_outlined,
-                                    size: 18,
-                                    color: fotoEvidenciaTrampa != null
-                                        ? AgroTheme.colorAccentDark
-                                        : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    fotoEvidenciaTrampa != null
-                                        ? "Evidencia de Trampa Lista ✓"
-                                        : "Fotografiar Trampa / Placa",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12,
-                                      color: fotoEvidenciaTrampa != null
-                                          ? AgroTheme.colorAccentDark
-                                          : AgroTheme.colorText,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: SoftButton(
-                      onTap: () async {
-                        if (nroTrampaCtrl.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Ingresá el número o escaneá el QR')),
-                          );
-                          return;
-                        }
-
-                        final ahora = DateTime.now();
-                        final String nro = nroTrampaCtrl.text.trim();
-                        final String cod = "TRP_${widget.codProductor}_$nro";
-                        final String idReg = "LOC_${ahora.millisecondsSinceEpoch}";
-
-                        await db.insert('lecturas_trampas', {
-                          'id': cod,
-                          'id_reg': idReg,
-                          'created_at': ahora.toIso8601String(),
-                          'establecimiento': widget.nombreProductor,
-                          'sector': cuartelSelec['chacra'] ?? '',
-                          'cuadro': cuartelSelec['cuadro'] ?? '',
-                          'cultivo': cuartelSelec['cultivo'] ?? '',
-                          'variedad': cuartelSelec['variedad'] ?? '',
-                          'fila': filaCtrl.text.trim(),
-                          'ubicacion': gpsCoords,
-                          'tipo_trampa': tipoPlaga,
-                          'cod_trampa': cod,
-                          'usuario': _userName,
-                          'trampa_numero': nro,
-                          'semana': "INSTALACION",
-                          'temporada': "${ahora.year}",
-                          'macho': "0",
-                          'hembra_virgen': "0",
-                          'hembra_gravida': "0",
-                          'url_evidencia': fotoEvidenciaTrampa?.path,
-                          'cod_establecimiento': widget.codProductor,
-                          'sincronizado': 0,
-                        });
-
-                        if (context.mounted) {
-                          Navigator.pop(ctx);
-                          _cargarDatos();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              backgroundColor: AgroTheme.colorAccent,
-                              content: Text('Trampa ubicada con éxito'),
-                            ),
-                          );
-                        }
-                      },
-                      child: const Center(
-                        child: Text(
-                          "Guardar Ubicación de Trampa",
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 13.5),
+                          ))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setModalState(() => tipoPlaga = v);
+                  },
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: nroTrampaCtrl,
+                        keyboardType: TextInputType.text,
+                        decoration: agroInputDecoration(
+                          label: 'N° o código de trampa',
+                          icono: Icons.tag_rounded,
                         ),
                       ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: 'Escanear código QR',
+                      child: Material(
+                        color: AgroColors.primarioSoft,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                          side: BorderSide(
+                              color: AgroColors.primario.withOpacity(0.35)),
+                        ),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                          onTap: () => _abrirEscannerQR((codigoLeido) {
+                            if (!panelAbierto) return;
+                            setModalState(() {
+                              nroTrampaCtrl.text = codigoLeido;
+                            });
+                          }),
+                          child: const SizedBox(
+                            width: 50,
+                            height: 50,
+                            child: Icon(Icons.qr_code_scanner_rounded,
+                                color: AgroColors.primario, size: 24),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                const Text('EVIDENCIA', style: AgroText.overline),
+                const SizedBox(height: 8),
+                _TileToggle(
+                  icono: Icons.my_location_rounded,
+                  iconoActivo: Icons.gps_fixed_rounded,
+                  texto: 'Fijar posición GPS',
+                  textoActivo: 'GPS fijado · tocar para actualizar',
+                  detalle: gpsCoords.isNotEmpty ? gpsCoords : 'Sin coordenadas fijadas',
+                  activo: gpsCoords.isNotEmpty,
+                  cargando: capturandoGps,
+                  onTap: capturandoGps
+                      ? null
+                      : () async {
+                          setModalState(() => capturandoGps = true);
+                          try {
+                            LocationPermission perm = await Geolocator.checkPermission();
+                            if (perm == LocationPermission.denied) {
+                              perm = await Geolocator.requestPermission();
+                            }
+                            final pos = await Geolocator.getCurrentPosition();
+                            if (panelAbierto) {
+                              setModalState(() {
+                                gpsCoords =
+                                    "${pos.latitude.toStringAsFixed(6)}, ${pos.longitude.toStringAsFixed(6)}";
+                              });
+                            }
+                          } catch (e) {
+                            if (sbCtx.mounted) {
+                              mostrarAgroSnack(sbCtx, 'Error GPS: $e',
+                                  tipo: AgroSnackTipo.error);
+                            }
+                          }
+                          if (panelAbierto) {
+                            setModalState(() => capturandoGps = false);
+                          }
+                        },
+                ),
+                const SizedBox(height: 8),
+                _TileToggle(
+                  icono: Icons.camera_alt_outlined,
+                  iconoActivo: Icons.check_circle_rounded,
+                  texto: 'Fotografiar trampa / placa',
+                  textoActivo: 'Evidencia de trampa lista',
+                  activo: rutaFotoEvidenciaTrampa != null,
+                  onTap: () async {
+                    try {
+                      final XFile? foto = await _picker.pickImage(
+                        source: ImageSource.camera,
+                        imageQuality: 75,
+                        maxWidth: 1280,
+                      );
+                      if (foto != null && panelAbierto) {
+                        setModalState(() {
+                          rutaFotoEvidenciaTrampa = foto.path;
+                        });
+                      }
+                    } catch (_) {}
+                  },
+                ),
+                const SizedBox(height: 20),
+                AgroButton(
+                  label: 'Guardar ubicación de trampa',
+                  icono: Icons.save_rounded,
+                  expandido: true,
+                  cargando: guardando,
+                  onTap: guardar,
+                ),
+              ],
             );
           },
         );
       },
     );
+
+    panelAbierto = false;
+    Future.delayed(const Duration(milliseconds: 500), () {
+      nroTrampaCtrl.dispose();
+      filaCtrl.dispose();
+    });
   }
 
   void _abrirEscannerQR(Function(String) onCodeFound) {
+    bool leido = false;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (c) => Scaffold(
+          backgroundColor: Colors.black,
           appBar: AppBar(
-            title: const Text("Escanear Código de Trampa",
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
             backgroundColor: Colors.black87,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            title: const Text("Escanear código de trampa",
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, fontSize: 16, color: Colors.white)),
           ),
-          body: MobileScanner(
-            onDetect: (capture) {
-              final List<Barcode> barcodes = capture.barcodes;
-              if (barcodes.isNotEmpty) {
-                final String valor = barcodes.first.rawValue ?? '';
-                if (valor.isNotEmpty) {
-                  Navigator.pop(c);
-                  onCodeFound(valor);
-                }
-              }
-            },
+          body: Stack(
+            children: [
+              MobileScanner(
+                onDetect: (capture) {
+                  if (leido) return;
+                  final List<Barcode> barcodes = capture.barcodes;
+                  if (barcodes.isNotEmpty) {
+                    final String valor = barcodes.first.rawValue ?? '';
+                    if (valor.isNotEmpty) {
+                      leido = true;
+                      Navigator.pop(c);
+                      onCodeFound(valor);
+                    }
+                  }
+                },
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 24,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.qr_code_2_rounded, color: Colors.white, size: 20),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Apuntá la cámara al código QR de la trampa.',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  void _mostrarModalLectura(Map<String, dynamic> trampa) {
+  // ==========================================================================
+  // LECTURA SEMANAL
+  // ==========================================================================
+  Future<void> _mostrarModalLectura(Map<String, dynamic> trampa) async {
     DateTime fechaSeleccionada = DateTime.now();
-    final fechaCtrl = TextEditingController(
-        text: DateFormat('yyyy-MM-dd').format(fechaSeleccionada));
     final machosCtrl = TextEditingController(text: "0");
     final hembrasVirgCtrl = TextEditingController(text: "0");
     final hembrasGravCtrl = TextEditingController(text: "0");
-    File? fotoLectura;
+    String? rutaFotoLectura;
+    bool guardando = false;
+    bool panelAbierto = true;
 
     String obtenerSemana(DateTime f) {
       final dayOfYear = int.parse(DateFormat("D").format(f));
@@ -556,270 +589,245 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
       return "Semana ${w.toString().padLeft(2, '0')}";
     }
 
-    showModalBottomSheet(
+    await mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: "Lectura · Trampa N° ${trampa['trampa_numero']}",
+      subtitulo: "${trampa['chacra']} · Cuadro ${trampa['cuadro']} (${trampa['tipo_trampa']})",
+      icono: Icons.add_task_rounded,
+      maxWidth: 560,
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
+          builder: (sbCtx, setModalState) {
             final int m = int.tryParse(machosCtrl.text) ?? 0;
             final int hv = int.tryParse(hembrasVirgCtrl.text) ?? 0;
             final int hg = int.tryParse(hembrasGravCtrl.text) ?? 0;
             final int total = m + hv + hg;
             final bool alertaUmbral = total >= 5;
 
-            return Container(
-              height: MediaQuery.of(context).size.height * 0.78,
-              decoration: const BoxDecoration(
-                color: AgroTheme.colorSurface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              padding: EdgeInsets.only(
-                top: 18,
-                left: 20,
-                right: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 18,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    "Lectura: Trampa N° ${trampa['trampa_numero']}",
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16.5,
-                        color: AgroTheme.colorText),
-                  ),
-                  Text(
-                    "${trampa['chacra']} · Cuadro ${trampa['cuadro']} (${trampa['tipo_trampa']})",
-                    style: const TextStyle(
-                        fontSize: 11.5, color: AgroTheme.colorTextSecondary),
-                  ),
-                  const Divider(color: AgroTheme.colorBorder),
-                  const SizedBox(height: 10),
+            Future<void> guardar() async {
+              setModalState(() => guardando = true);
+              try {
+                final db = await DatabaseHelper.instance.database;
+                final ahora = DateTime.now();
+                final String idReg = "LEC_${ahora.millisecondsSinceEpoch}";
+                final String semanaCalculada = obtenerSemana(fechaSeleccionada);
 
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TextFormField(
-                            controller: fechaCtrl,
-                            readOnly: true,
-                            onTap: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: fechaSeleccionada,
-                                firstDate: DateTime(2020),
-                                lastDate: DateTime(2035),
-                              );
-                              if (picked != null) {
-                                setModalState(() {
-                                  fechaSeleccionada = picked;
-                                  fechaCtrl.text =
-                                      DateFormat('yyyy-MM-dd').format(picked);
-                                });
-                              }
-                            },
-                            decoration: InputDecoration(
-                              labelText: "Fecha de Revisión",
-                              filled: true,
-                              fillColor: AgroTheme.colorBg,
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 12),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                                borderSide: BorderSide.none,
-                              ),
-                              suffixIcon: const Icon(Icons.calendar_today_rounded,
-                                  size: 18, color: AgroTheme.colorAccentDark),
+                await db.insert('lecturas_trampas', {
+                  'id': trampa['cod_trampa'],
+                  'id_reg': idReg,
+                  'created_at': DateFormat('yyyy-MM-dd').format(fechaSeleccionada),
+                  'establecimiento': widget.nombreProductor,
+                  'sector': trampa['chacra'],
+                  'cuadro': trampa['cuadro'],
+                  'cultivo': trampa['cultivo'],
+                  'variedad': trampa['variedad'],
+                  'fila': trampa['fila'],
+                  'ubicacion': trampa['ubicacion'],
+                  'tipo_trampa': trampa['tipo_trampa'],
+                  'cod_trampa': trampa['cod_trampa'],
+                  'usuario': _userName,
+                  'trampa_numero': trampa['trampa_numero'],
+                  'semana': semanaCalculada,
+                  'temporada': "${fechaSeleccionada.year}",
+                  'macho': machosCtrl.text.trim(),
+                  'hembra_virgen': hembrasVirgCtrl.text.trim(),
+                  'hembra_gravida': hembrasGravCtrl.text.trim(),
+                  'url_evidencia': rutaFotoLectura,
+                  'cod_establecimiento': widget.codProductor,
+                  'sincronizado': 0,
+                });
+
+                if (ctx.mounted) Navigator.pop(ctx);
+                _cargarDatos(silencioso: true);
+                if (mounted) {
+                  mostrarAgroSnack(
+                    context,
+                    '¡Lectura guardada para $semanaCalculada con éxito!',
+                    tipo: alertaUmbral ? AgroSnackTipo.aviso : AgroSnackTipo.ok,
+                  );
+                }
+              } catch (e) {
+                if (panelAbierto) setModalState(() => guardando = false);
+                if (sbCtx.mounted) {
+                  mostrarAgroSnack(sbCtx, 'No se pudo guardar la lectura: $e',
+                      tipo: AgroSnackTipo.error);
+                }
+              }
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: sbCtx,
+                      initialDate: fechaSeleccionada,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2035),
+                      helpText: 'Fecha de revisión',
+                    );
+                    if (picked != null && panelAbierto) {
+                      setModalState(() => fechaSeleccionada = picked);
+                    }
+                  },
+                  child: InputDecorator(
+                    decoration: agroInputDecoration(
+                      label: 'Fecha de revisión',
+                      icono: Icons.calendar_today_rounded,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            DateFormat('dd/MM/yyyy').format(fechaSeleccionada),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AgroTheme.colorText,
                             ),
                           ),
-                          const SizedBox(height: 14),
-
-                          const Text(
-                            "Capturas de la Semana:",
-                            style: TextStyle(
+                        ),
+                        AgroBadge(
+                          texto: obtenerSemana(fechaSeleccionada),
+                          icono: Icons.date_range_rounded,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('CAPTURAS DE LA SEMANA', style: AgroText.overline),
+                const SizedBox(height: 8),
+                _StepperConteo(
+                  titulo: 'Machos',
+                  color: AgroColors.danger,
+                  ctrl: machosCtrl,
+                  onChanged: () => setModalState(() {}),
+                ),
+                _StepperConteo(
+                  titulo: 'Hembras vírgenes',
+                  color: Colors.purple.shade700,
+                  ctrl: hembrasVirgCtrl,
+                  onChanged: () => setModalState(() {}),
+                ),
+                _StepperConteo(
+                  titulo: 'Hembras grávidas',
+                  color: Colors.orange.shade800,
+                  ctrl: hembrasGravCtrl,
+                  onChanged: () => setModalState(() {}),
+                ),
+                const SizedBox(height: 6),
+                _TileToggle(
+                  icono: Icons.camera_alt_outlined,
+                  iconoActivo: Icons.check_circle_rounded,
+                  texto: 'Fotografiar placa',
+                  textoActivo: 'Evidencia lista · tocar para repetir',
+                  activo: rutaFotoLectura != null,
+                  onTap: () async {
+                    try {
+                      final XFile? foto = await _picker.pickImage(
+                        source: ImageSource.camera,
+                        imageQuality: 75,
+                        maxWidth: 1280,
+                      );
+                      if (foto != null && panelAbierto) {
+                        setModalState(() {
+                          rutaFotoLectura = foto.path;
+                        });
+                      }
+                    } catch (_) {}
+                  },
+                ),
+                const SizedBox(height: 14),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: alertaUmbral ? AgroColors.dangerSoft : AgroColors.okSoft,
+                    borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+                    border: Border.all(
+                      color: (alertaUmbral ? AgroColors.danger : AgroColors.ok)
+                          .withOpacity(0.4),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        alertaUmbral
+                            ? Icons.warning_amber_rounded
+                            : Icons.check_circle_outline_rounded,
+                        color: alertaUmbral ? AgroColors.danger : AgroColors.ok,
+                        size: 26,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              alertaUmbral
+                                  ? 'Supera el umbral económico'
+                                  : 'Nivel tolerable',
+                              style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 13,
-                                color: AgroTheme.colorText),
-                          ),
-                          const SizedBox(height: 8),
-
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildContadorMini("Machos", machosCtrl, () => setModalState(() {})),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: _buildContadorMini("H. Vírgenes", hembrasVirgCtrl, () => setModalState(() {})),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: _buildContadorMini("H. Grávidas", hembrasGravCtrl, () => setModalState(() {})),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-
-                          InkWell(
-                            onTap: () async {
-                              try {
-                                final XFile? foto = await _picker.pickImage(
-                                  source: ImageSource.camera,
-                                  imageQuality: 75,
-                                  maxWidth: 1280,
-                                );
-                                if (foto != null) {
-                                  setModalState(() {
-                                    fotoLectura = File(foto.path);
-                                  });
-                                }
-                              } catch (_) {}
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: fotoLectura != null ? AgroTheme.colorAccentSoft : AgroTheme.colorBg,
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                    color: fotoLectura != null ? AgroTheme.colorAccent : AgroTheme.colorBorder),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.camera_alt_outlined,
-                                      size: 18,
-                                      color: fotoLectura != null ? AgroTheme.colorAccentDark : Colors.grey),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    fotoLectura != null ? "Evidencia Lista ✓" : "Fotografiar Placa",
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 12,
-                                        color: fotoLectura != null ? AgroTheme.colorAccentDark : AgroTheme.colorText),
-                                  ),
-                                ],
+                                color: alertaUmbral ? AgroColors.danger : AgroColors.ok,
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 14),
-
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: alertaUmbral ? const Color(0xFFFEF2F2) : AgroTheme.colorAccentSoft,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                  color: alertaUmbral
-                                      ? AgroTheme.colorDanger.withOpacity(0.5)
-                                      : AgroTheme.colorAccent),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  alertaUmbral ? Icons.warning_amber_rounded : Icons.check_circle_outline_rounded,
-                                  color: alertaUmbral ? AgroTheme.colorDanger : AgroTheme.colorAccentDark,
-                                  size: 20,
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  alertaUmbral
-                                      ? "Total: $total ind. (Supera Umbral Económico)"
-                                      : "Total: $total ind. (Nivel Tolerable)",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 12,
-                                    color: alertaUmbral ? AgroTheme.colorDanger : AgroTheme.colorAccentDark,
-                                  ),
-                                ),
-                              ],
+                            const Text('Umbral: 5 individuos por trampa / semana',
+                                style: AgroText.secundario),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '$total',
+                            style: TextStyle(
+                              fontSize: 26,
+                              height: 1.0,
+                              fontWeight: FontWeight.w900,
+                              color: alertaUmbral ? AgroColors.danger : AgroColors.ok,
                             ),
                           ),
+                          const Text('ind.', style: AgroText.label),
                         ],
                       ),
-                    ),
+                    ],
                   ),
-
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: SoftButton(
-                      onTap: () async {
-                        final db = await DatabaseHelper.instance.database;
-                        final ahora = DateTime.now();
-                        final String idReg = "LEC_${ahora.millisecondsSinceEpoch}";
-                        final String semanaCalculada = obtenerSemana(fechaSeleccionada);
-
-                        await db.insert('lecturas_trampas', {
-                          'id': trampa['cod_trampa'],
-                          'id_reg': idReg,
-                          'created_at': fechaCtrl.text.trim(),
-                          'establecimiento': widget.nombreProductor,
-                          'sector': trampa['chacra'],
-                          'cuadro': trampa['cuadro'],
-                          'cultivo': trampa['cultivo'],
-                          'variedad': trampa['variedad'],
-                          'fila': trampa['fila'],
-                          'ubicacion': trampa['ubicacion'],
-                          'tipo_trampa': trampa['tipo_trampa'],
-                          'cod_trampa': trampa['cod_trampa'],
-                          'usuario': _userName,
-                          'trampa_numero': trampa['trampa_numero'],
-                          'semana': semanaCalculada,
-                          'temporada': "${fechaSeleccionada.year}",
-                          'macho': machosCtrl.text.trim(),
-                          'hembra_virgen': hembrasVirgCtrl.text.trim(),
-                          'hembra_gravida': hembrasGravCtrl.text.trim(),
-                          'url_evidencia': fotoLectura?.path,
-                          'cod_establecimiento': widget.codProductor,
-                          'sincronizado': 0,
-                        });
-
-                        if (context.mounted) {
-                          Navigator.pop(ctx);
-                          _cargarDatos();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              backgroundColor: AgroTheme.colorAccent,
-                              content: Text('¡Lectura guardada para $semanaCalculada con éxito!'),
-                            ),
-                          );
-                        }
-                      },
-                      child: const Center(
-                        child: Text("Guardar Lectura",
-                            style: TextStyle(
-                                color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13.5)),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 16),
+                AgroButton(
+                  label: 'Guardar lectura',
+                  icono: Icons.save_rounded,
+                  expandido: true,
+                  cargando: guardando,
+                  onTap: guardar,
+                ),
+              ],
             );
           },
         );
       },
     );
+
+    panelAbierto = false;
+    Future.delayed(const Duration(milliseconds: 500), () {
+      machosCtrl.dispose();
+      hembrasVirgCtrl.dispose();
+      hembrasGravCtrl.dispose();
+    });
   }
 
   // ==========================================================================
-  // 💡 MODAL DE CURVA COMPACTA CON BOTÓN PDF EN CABECERA
+  // CURVA SEMANAL DE UNA TRAMPA (con PDF)
   // ==========================================================================
-  void _mostrarReporteSemanas(Map<String, dynamic> trampa) async {
+  Future<void> _mostrarReporteSemanas(Map<String, dynamic> trampa) async {
     final db = await DatabaseHelper.instance.database;
     final List<Map<String, dynamic>> lecturas = await db.query(
       'lecturas_trampas',
@@ -830,186 +838,186 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
 
     if (!mounted) return;
 
-    int maxCaptura = 1;
+    int acumulado = 0;
+    int maxCaptura = 0;
+    int semanasAlerta = 0;
     for (var l in lecturas) {
-      final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
-      final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
-      final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
-      final int tot = m + hv + hg;
+      final int tot = _totalLectura(l);
+      acumulado += tot;
       if (tot > maxCaptura) maxCaptura = tot;
+      if (tot >= _umbral) semanasAlerta++;
     }
 
-    showModalBottomSheet(
+    mostrarAgroPanel<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      titulo: "Curva semanal · TR #${trampa['trampa_numero']}",
+      subtitulo: "${trampa['chacra']} · Cd. ${trampa['cuadro']} · ${trampa['tipo_trampa']}",
+      icono: Icons.show_chart_rounded,
+      maxWidth: 640,
       builder: (ctx) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.65,
-          decoration: const BoxDecoration(
-            color: AgroTheme.colorSurface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AgroStatGrid(
+              stats: [
+                AgroStat(
+                  label: 'Semanas',
+                  valor: '${lecturas.length}',
+                  icono: Icons.date_range_rounded,
                 ),
+                AgroStat(
+                  label: 'Acumulado',
+                  valor: '$acumulado ind.',
+                  icono: Icons.functions_rounded,
+                ),
+                AgroStat(
+                  label: 'Máximo',
+                  valor: '$maxCaptura ind.',
+                  icono: Icons.trending_up_rounded,
+                  color: _colorCaptura(maxCaptura),
+                ),
+                AgroStat(
+                  label: 'Sobre umbral',
+                  valor: '$semanasAlerta sem.',
+                  icono: Icons.warning_amber_rounded,
+                  color: semanasAlerta > 0 ? AgroColors.danger : AgroColors.ok,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (lecturas.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  "No hay recuentos semanales cargados aún.",
+                  textAlign: TextAlign.center,
+                  style: AgroText.secundario,
+                ),
+              )
+            else ...[
+              const AgroSectionHeader(
+                titulo: 'Capturas por semana',
+                subtitulo: 'Total de individuos · umbral 5',
+                icono: Icons.bar_chart_rounded,
               ),
-              const SizedBox(height: 10),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Curva Semanal · TR #${trampa['trampa_numero']}",
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 16, color: AgroTheme.colorText),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          "${trampa['chacra']} · Cd. ${trampa['cuadro']} · ${trampa['tipo_trampa']}",
-                          style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      // 💡 Botón PDF oficial colocado arriba junto a la cruz
-                      IconButton(
-                        icon: const Icon(Icons.picture_as_pdf_outlined,
-                            color: AgroTheme.colorAccentDark, size: 22),
-                        tooltip: "Exportar Reporte Semanal en PDF",
-                        onPressed: () => _generarPdfTrampa(trampa, lecturas),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, size: 22),
-                        onPressed: () => Navigator.pop(ctx),
-                      ),
-                    ],
-                  ),
-                ],
+              const SizedBox(height: 12),
+              AgroColumnChart(
+                items: lecturas.map((l) {
+                  final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
+                  final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
+                  final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
+                  final String sem = (l['semana'] ?? 'S/D').toString();
+                  return AgroBarItem(
+                    label: sem.replaceAll('Semana ', 'S'),
+                    valor: (m + hv + hg).toDouble(),
+                    detalle: '$sem · M $m · H ${hv + hg}',
+                  );
+                }).toList(),
+                umbral: _umbral.toDouble(),
+                altura: 160,
               ),
-              const Divider(color: AgroTheme.colorBorder, height: 16),
-
-              Expanded(
-                child: lecturas.isEmpty
-                    ? const Center(
-                        child: Text("No hay recuentos semanales cargados aún.",
-                            style: TextStyle(color: AgroTheme.colorTextSecondary)))
-                    : ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: lecturas.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 10),
-                        itemBuilder: (context, i) {
-                          final l = lecturas[i];
-                          final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
-                          final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
-                          final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
-                          final int total = m + hv + hg;
-                          final bool alertaUmbral = total >= 5;
-                          final String semNom =
-                              (l['semana'] ?? 'S/D').toString().replaceAll('Semana ', 'Sem ');
-                          final String? foto = l['url_evidencia']?.toString();
-                          final double ratio = (total / maxCaptura).clamp(0.08, 1.0);
-
-                          return Container(
-                            width: 95,
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: alertaUmbral ? const Color(0xFFFEF2F2) : AgroTheme.colorBg,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: alertaUmbral
-                                    ? AgroTheme.colorDanger.withOpacity(0.4)
-                                    : AgroTheme.colorBorder,
-                                width: alertaUmbral ? 1.2 : 1.0,
-                              ),
-                            ),
-                            child: Column(
-                              children: [
-                                Text(
-                                  semNom,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 11,
-                                    color: alertaUmbral ? AgroTheme.colorDanger : AgroTheme.colorText,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Expanded(
-                                  child: Align(
-                                    alignment: Alignment.bottomCenter,
-                                    child: FractionallySizedBox(
-                                      heightFactor: ratio,
-                                      child: Container(
-                                        width: 22,
-                                        decoration: BoxDecoration(
-                                          gradient: LinearGradient(
-                                            begin: Alignment.bottomCenter,
-                                            end: Alignment.topCenter,
-                                            colors: alertaUmbral
-                                                ? [AgroTheme.colorDanger, const Color(0xFFF87171)]
-                                                : [AgroTheme.colorAccentDark, AgroTheme.colorAccent],
-                                          ),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Center(
-                                          child: Text(
-                                            "$total",
-                                            style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w900),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text("M: $m · H: ${hv + hg}",
-                                    style: const TextStyle(
-                                        fontSize: 9.5,
-                                        fontWeight: FontWeight.w600,
-                                        color: AgroTheme.colorTextSecondary)),
-                                const SizedBox(height: 4),
-                                if (foto != null && foto.isNotEmpty)
-                                  InkWell(
-                                    onTap: () => _verFoto(foto),
-                                    child: const Icon(Icons.camera_alt_rounded,
-                                        size: 14, color: AgroTheme.colorAccentDark),
-                                  )
-                                else
-                                  const SizedBox(height: 14),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-              ),
+              const SizedBox(height: 8),
+              const AgroLeyenda(items: [
+                AgroLeyendaItem('Bajo umbral', AgroColors.primario),
+                AgroLeyendaItem('Supera umbral (≥ 5)', AgroColors.danger),
+              ]),
+              const SizedBox(height: 18),
+              const Text('DETALLE SEMANAL', style: AgroText.overline),
+              const SizedBox(height: 8),
+              ...lecturas.reversed.map(_filaSemana),
             ],
-          ),
+            const SizedBox(height: 12),
+            AgroExportBar(
+              info: 'Informe dinámico de trampeo de esta trampa.',
+              onPdf: () => _generarPdfTrampa(trampa, lecturas),
+            ),
+            const SizedBox(height: 10),
+            AgroButton(
+              label: 'Cargar lectura',
+              icono: Icons.add_task_rounded,
+              expandido: true,
+              onTap: () {
+                Navigator.pop(ctx);
+                _mostrarModalLectura(trampa);
+              },
+            ),
+          ],
         );
       },
     );
   }
 
+  Widget _filaSemana(Map<String, dynamic> l) {
+    final int m = int.tryParse(l['macho']?.toString() ?? '0') ?? 0;
+    final int hv = int.tryParse(l['hembra_virgen']?.toString() ?? '0') ?? 0;
+    final int hg = int.tryParse(l['hembra_gravida']?.toString() ?? '0') ?? 0;
+    final int total = m + hv + hg;
+    final bool alertaUmbral = total >= _umbral;
+    final String semNom = (l['semana'] ?? 'S/D').toString();
+    final String? foto = l['url_evidencia']?.toString();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: alertaUmbral ? AgroColors.dangerSoft : AgroTheme.colorBg,
+        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+        border: Border.all(
+          color: alertaUmbral
+              ? AgroColors.danger.withOpacity(0.35)
+              : AgroTheme.colorBorder,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$semNom · ${_fmtFecha(l['created_at']?.toString())}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AgroText.valor.copyWith(
+                    fontSize: 13,
+                    color: alertaUmbral ? AgroColors.danger : AgroTheme.colorText,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Machos $m · H. vírgenes $hv · H. grávidas $hg',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AgroText.secundario.copyWith(fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          AgroBadge(
+            texto: '$total ind.',
+            color: _colorCaptura(total),
+            fondo: _fondoCaptura(total),
+            grande: true,
+          ),
+          if (foto != null && foto.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            AgroIconButton(
+              icono: Icons.image_outlined,
+              tooltip: 'Ver foto',
+              size: 34,
+              color: AgroColors.primario,
+              onTap: () => _verFoto(foto),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   // ==========================================================================
-  // 📄 EXPORTACIÓN PDF PROFESIONAL CON GRÁFICO DE CURVA
+  // PDF DE LA TRAMPA (contenido original)
   // ==========================================================================
   Future<void> _generarPdfTrampa(
       Map<String, dynamic> trampa, List<Map<String, dynamic>> lecturas) async {
@@ -1213,318 +1221,417 @@ class _TrampasUbicacionScreenState extends State<TrampasUbicacionScreen> {
       ),
     );
 
-    final List<int> bytes = await pdf.save();
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/Reporte_Trampa_${trampa['trampa_numero']}.pdf');
-    await file.writeAsBytes(bytes, flush: true);
+    final bytes = await pdf.save();
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/pdf')],
-      text: 'Reporte de Trampa N° ${trampa['trampa_numero']} - ${widget.nombreProductor}',
+    if (!mounted) return;
+    await exportarArchivoAgro(
+      bytes: bytes,
+      nombre: 'Reporte_Trampa_${trampa['trampa_numero']}.pdf',
+      mime: AgroMime.pdf,
+      texto: 'Reporte de Trampa N° ${trampa['trampa_numero']} - ${widget.nombreProductor}',
+      context: context,
     );
   }
 
+  // ==========================================================================
+  // VISOR DE FOTO
+  // ==========================================================================
   void _verFoto(String url) {
+    // En web image_picker devuelve blob URLs: siempre Image.network.
+    final bool esRemota = kIsWeb || url.startsWith('http') || url.startsWith('blob:');
+    Widget error(BuildContext _, Object __, StackTrace? ___) => Container(
+          width: 280,
+          height: 200,
+          color: AgroTheme.colorSurface,
+          alignment: Alignment.center,
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.broken_image_outlined,
+                  size: 36, color: AgroTheme.colorTextSecondary),
+              SizedBox(height: 8),
+              Text('Foto no disponible en este dispositivo',
+                  style: AgroText.secundario),
+            ],
+          ),
+        );
+
     showDialog(
       context: context,
-      builder: (ctx) => Dialog(
+      builder: (dCtx) => Dialog(
         backgroundColor: Colors.transparent,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(16),
-          child: url.startsWith('http')
-              ? Image.network(url, fit: BoxFit.cover)
-              : Image.file(File(url), fit: BoxFit.cover),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildContadorMini(String label, TextEditingController ctrl, VoidCallback onChanged) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: AgroTheme.colorBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AgroTheme.colorBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 10.5, fontWeight: FontWeight.w700, color: AgroTheme.colorTextSecondary)),
-          const SizedBox(height: 2),
-          TextFormField(
-            controller: ctrl,
-            keyboardType: TextInputType.number,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-            decoration: const InputDecoration(isDense: true, border: InputBorder.none),
-            onChanged: (_) => onChanged(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  InputDecoration _inputDecoration(String label) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(fontSize: 13, color: AgroTheme.colorTextSecondary),
-      filled: true,
-      fillColor: AgroTheme.colorBg,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AgroTheme.radiusMd), borderSide: BorderSide.none),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AgroTheme.colorBg,
-      appBar: AppBar(
-        backgroundColor: AgroTheme.colorSurface.withOpacity(0.92),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AgroTheme.colorText),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
           children: [
-            const Text("Ubicación y Trampeo",
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText)),
-            Text(widget.nombreProductor,
-                style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500)),
-          ],
-        ),
-        actions: [
-          // 💡 Botón Pin para abrir el mapa satelital interactivo
-          IconButton(
-            icon: const Icon(Icons.map_rounded, color: AgroTheme.colorAccentDark, size: 24),
-            tooltip: "Ver Mapa Satelital de Trampas",
-            onPressed: _abrirMapaGlobalTrampas,
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (_chacrasDisponibles.length > 1)
-              Container(
-                height: 42,
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  itemCount: _chacrasDisponibles.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (context, idx) {
-                    final ch = _chacrasDisponibles[idx];
-                    final isSelected = _chacraSeleccionada == ch;
-
-                    return ChoiceChip(
-                      label: Text(ch == "TODAS" ? "Todas las Chacras" : "Chacra $ch"),
-                      selected: isSelected,
-                      selectedColor: AgroTheme.colorAccentDark,
-                      labelStyle: TextStyle(
-                        fontSize: 12,
-                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-                        color: isSelected ? Colors.white : AgroTheme.colorText,
-                      ),
-                      backgroundColor: AgroTheme.colorSurface,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(
-                            color: isSelected ? AgroTheme.colorAccentDark : AgroTheme.colorBorder),
-                      ),
-                      onSelected: (selected) {
-                        if (selected) setState(() => _chacraSeleccionada = ch);
-                      },
-                    );
-                  },
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: InteractiveViewer(
+                child: esRemota
+                    ? Image.network(url, fit: BoxFit.contain, errorBuilder: error)
+                    : Image.file(File(url), fit: BoxFit.contain, errorBuilder: error),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Material(
+                color: Colors.black54,
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: 'Cerrar',
+                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  onPressed: () => Navigator.pop(dCtx),
                 ),
               ),
-
-            Expanded(
-              child: _cargando
-                  ? const Center(child: CircularProgressIndicator(color: AgroTheme.colorAccent))
-                  : _trampasFiltradas.isEmpty
-                      ? const Center(child: Text("No hay trampas ubicadas en este sector."))
-                      : ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
-                          itemCount: _trampasFiltradas.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 12),
-                          itemBuilder: (context, idx) {
-                            final trampa = _trampasFiltradas[idx];
-                            final fechaStr =
-                                trampa['created_at']?.toString().split('T').first ?? '';
-                            final String? fotoUrl = trampa['url_evidencia']?.toString();
-
-                            return Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: AgroTheme.colorSurface,
-                                borderRadius: BorderRadius.circular(AgroTheme.radiusLg),
-                                border: Border.all(color: AgroTheme.colorBorder),
-                                boxShadow: const [
-                                  BoxShadow(
-                                      color: Color(0x04141E18), blurRadius: 8, offset: Offset(0, 2)),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 8, vertical: 4),
-                                            decoration: BoxDecoration(
-                                                color: const Color(0xFFB8862A),
-                                                borderRadius: BorderRadius.circular(6)),
-                                            child: Text(
-                                              "TRAMPA #${trampa['trampa_numero']}",
-                                              style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.w800,
-                                                  fontSize: 11),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text("Chacra: ${trampa['chacra']}",
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.w700, fontSize: 13)),
-                                        ],
-                                      ),
-                                      Row(
-                                        children: [
-                                          if (fotoUrl != null && fotoUrl.isNotEmpty)
-                                            IconButton(
-                                              icon: const Icon(Icons.image_outlined,
-                                                  size: 20, color: AgroTheme.colorAccentDark),
-                                              onPressed: () => _verFoto(fotoUrl),
-                                              tooltip: "Ver Foto de Trampa",
-                                            ),
-                                          Text(fechaStr,
-                                              style: const TextStyle(
-                                                  fontSize: 11.5, color: AgroTheme.colorTextSecondary)),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-
-                                  Text(
-                                    trampa['tipo_trampa'] ?? 'Plaga no definida',
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 14.5,
-                                        color: AgroTheme.colorText),
-                                  ),
-                                  const SizedBox(height: 8),
-
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                    decoration: BoxDecoration(
-                                        color: AgroTheme.colorBg,
-                                        borderRadius: BorderRadius.circular(8)),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text("Cuadro: ${trampa['cuadro']}",
-                                            style: const TextStyle(
-                                                fontSize: 12, fontWeight: FontWeight.w700)),
-                                        Text("Fila: ${trampa['fila']}",
-                                            style: const TextStyle(
-                                                fontSize: 12, fontWeight: FontWeight.w600)),
-                                        Text("${trampa['cultivo']} - ${trampa['variedad']}",
-                                            style: const TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w600,
-                                                color: AgroTheme.colorTextSecondary)),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      SoftButton(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 7),
-                                        borderRadius: 8,
-                                        onTap: () => _mostrarModalLectura(trampa),
-                                        child: Row(
-                                          children: const [
-                                            Icon(Icons.add_task_rounded,
-                                                size: 14, color: Colors.white),
-                                            SizedBox(width: 5),
-                                            Text("Lectura",
-                                                style: TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 11.5)),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      SoftButton(
-                                        isSecondary: true,
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 7),
-                                        borderRadius: 8,
-                                        onTap: () => _mostrarReporteSemanas(trampa),
-                                        child: Row(
-                                          children: const [
-                                            Icon(Icons.show_chart_rounded,
-                                                size: 14, color: AgroTheme.colorAccentDark),
-                                            SizedBox(width: 5),
-                                            Text("Curva",
-                                                style: TextStyle(
-                                                    color: AgroTheme.colorAccentDark,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 11.5)),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
             ),
           ],
         ),
       ),
-      floatingActionButton: SoftButton(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-        borderRadius: 28,
-        onTap: _abrirModalInstalarTrampa,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.add_location_alt_outlined, color: Colors.white, size: 20),
-            SizedBox(width: 8),
-            Text("Ubicar Trampa",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+    );
+  }
+
+  // ==========================================================================
+  // UI PRINCIPAL
+  // ==========================================================================
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AgroTheme.colorBg,
+      appBar: AgroAppBar(
+        titulo: "Ubicación y trampeo",
+        subtitulo: widget.nombreProductor,
+        acciones: [
+          AgroIconButton(
+            icono: Icons.refresh_rounded,
+            tooltip: 'Actualizar',
+            onTap: _cargando ? null : () => _cargarDatos(),
+          ),
+          const SizedBox(width: 8),
+          AgroIconButton(
+            icono: Icons.map_rounded,
+            tooltip: 'Ver mapa satelital de trampas',
+            color: AgroColors.primario,
+            onTap: _cargando ? null : _abrirMapaGlobalTrampas,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: _cargando
+            ? const AgroLoading(mensaje: 'Cargando trampas…')
+            : _todasTrampas.isEmpty
+                ? AgroEmptyState(
+                    icono: Icons.add_location_alt_outlined,
+                    titulo: 'Todavía no hay trampas ubicadas',
+                    mensaje:
+                        'Registrá cada trampa con su código, posición GPS y una foto para empezar el monitoreo.',
+                    accion: AgroButton(
+                      label: 'Ubicar trampa',
+                      icono: Icons.add_location_alt_outlined,
+                      onTap: _abrirModalInstalarTrampa,
+                    ),
+                  )
+                : RefreshIndicator(
+                    color: AgroColors.primario,
+                    onRefresh: () => _cargarDatos(silencioso: true),
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.only(top: 16, bottom: 110),
+                      children: [
+                        AgroContent(child: _contenido()),
+                      ],
+                    ),
+                  ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _abrirModalInstalarTrampa,
+        backgroundColor: AgroColors.primario,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_location_alt_outlined),
+        label: const Text(
+          'Ubicar trampa',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+
+  Widget _contenido() {
+    final trampas = _trampasFiltradas;
+    final int conGps = trampas.where(_tieneGps).length;
+    final int sinGps = trampas.length - conGps;
+    final Map<String, int> porPlaga = {};
+    for (var t in trampas) {
+      final p = (t['tipo_trampa'] ?? 'Sin definir').toString();
+      porPlaga[p] = (porPlaga[p] ?? 0) + 1;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AgroKpiGrid(
+          kpis: [
+            AgroKpiTile(
+              label: 'Trampas',
+              valor: '${trampas.length}',
+              icono: Icons.pest_control_rounded,
+              detalle: _chacraSeleccionada == "TODAS"
+                  ? 'todas las chacras'
+                  : 'chacra $_chacraSeleccionada',
+            ),
+            AgroKpiTile(
+              label: 'Con GPS',
+              valor: '$conGps',
+              icono: Icons.gps_fixed_rounded,
+              color: AgroColors.ok,
+              detalle: 'ver en el mapa',
+              onTap: conGps > 0 ? _abrirMapaGlobalTrampas : null,
+            ),
+            AgroKpiTile(
+              label: 'Sin GPS',
+              valor: '$sinGps',
+              icono: Icons.gps_off_rounded,
+              color: sinGps > 0 ? AgroColors.warn : AgroColors.neutral,
+              detalle: sinGps > 0 ? 'completar posición' : 'todo georreferenciado',
+            ),
+            AgroKpiTile(
+              label: 'Plagas',
+              valor: '${porPlaga.length}',
+              icono: Icons.bug_report_rounded,
+              color: AgroColors.info,
+              detalle: 'monitoreadas',
+            ),
           ],
         ),
+        const SizedBox(height: 12),
+        AgroCard(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_chacrasDisponibles.length > 1) ...[
+                AgroChipSelector(
+                  label: 'Chacra',
+                  opciones: _chacrasDisponibles.where((c) => c != "TODAS").toList(),
+                  valor: _chacraSeleccionada == "TODAS" ? null : _chacraSeleccionada,
+                  textoTodos: 'Todas',
+                  onChanged: (v) => setState(() => _chacraSeleccionada = v ?? "TODAS"),
+                ),
+                const SizedBox(height: 12),
+              ],
+              const Text('PLAGAS (COLOR EN EL MAPA)', style: AgroText.overline),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                children: porPlaga.entries
+                    .map((e) => Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _punto(_colorPlaga(e.key)),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${e.key.split(' (').first} · ${e.value}',
+                              style: AgroText.secundario.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: AgroTheme.colorText,
+                              ),
+                            ),
+                          ],
+                        ))
+                    .toList(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        AgroSectionHeader(
+          titulo: 'Trampas instaladas',
+          subtitulo: 'Cargá la lectura semanal o revisá la curva de capturas',
+          icono: Icons.pest_control_rounded,
+          trailing: AgroBadge(texto: '${trampas.length}'),
+        ),
+        const SizedBox(height: 12),
+        if (trampas.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 28),
+            child: Text(
+              'No hay trampas ubicadas en este sector.',
+              textAlign: TextAlign.center,
+              style: AgroText.secundario,
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, c) {
+              final int cols = c.maxWidth >= 1100 ? 3 : (c.maxWidth >= 720 ? 2 : 1);
+              final double ancho =
+                  ((c.maxWidth - (cols - 1) * 12) / cols).floorToDouble();
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: trampas
+                    .map((t) => SizedBox(width: ancho, child: _tarjetaTrampa(t)))
+                    .toList(),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _tarjetaTrampa(Map<String, dynamic> trampa) {
+    final String plaga = (trampa['tipo_trampa'] ?? 'Plaga no definida').toString();
+    final Color colorPlaga = _colorPlaga(plaga);
+    final bool gps = _tieneGps(trampa);
+    final String? fotoUrl = trampa['url_evidencia']?.toString();
+    final String cultivo = (trampa['cultivo'] ?? '').toString();
+    final String variedad = (trampa['variedad'] ?? '').toString();
+
+    return AgroCard(
+      padding: const EdgeInsets.all(14),
+      onTap: () => _mostrarReporteSemanas(trampa),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: colorPlaga.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: colorPlaga.withOpacity(0.45)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('TR', style: AgroText.overline),
+                    Text(
+                      "${trampa['trampa_numero'] ?? '-'}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        height: 1.1,
+                        fontWeight: FontWeight.w900,
+                        color: AgroTheme.colorText,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _punto(colorPlaga),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            plaga,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AgroText.tituloCard,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      "Chacra ${trampa['chacra'] ?? '-'} · Cuadro ${trampa['cuadro'] ?? '-'}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AgroText.secundario,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              gps
+                  ? const AgroBadge(
+                      texto: 'GPS',
+                      color: AgroColors.ok,
+                      fondo: AgroColors.okSoft,
+                      icono: Icons.gps_fixed_rounded,
+                    )
+                  : const AgroBadge(
+                      texto: 'Sin GPS',
+                      color: AgroColors.warn,
+                      fondo: AgroColors.warnSoft,
+                      icono: Icons.gps_off_rounded,
+                    ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              AgroTag(texto: "Fila ${trampa['fila'] ?? '-'}", icono: Icons.straighten_rounded),
+              if (cultivo.isNotEmpty || variedad.isNotEmpty)
+                AgroTag(
+                  texto: [cultivo, variedad].where((s) => s.isNotEmpty).join(' - '),
+                  icono: Icons.local_florist_outlined,
+                ),
+              AgroTag(
+                texto: 'Instalada ${_fmtFecha(trampa['created_at']?.toString())}',
+                icono: Icons.event_rounded,
+              ),
+              if (gps)
+                AgroTag(
+                  texto: (trampa['ubicacion'] ?? '').toString(),
+                  icono: Icons.place_outlined,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: AgroButton(
+                  label: 'Lectura',
+                  icono: Icons.add_task_rounded,
+                  expandido: true,
+                  compacto: true,
+                  onTap: () => _mostrarModalLectura(trampa),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: AgroButton(
+                  label: 'Curva',
+                  icono: Icons.show_chart_rounded,
+                  tipo: AgroButtonTipo.secundario,
+                  expandido: true,
+                  compacto: true,
+                  onTap: () => _mostrarReporteSemanas(trampa),
+                ),
+              ),
+              if (fotoUrl != null && fotoUrl.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                AgroIconButton(
+                  icono: Icons.image_outlined,
+                  tooltip: 'Ver foto de trampa',
+                  size: 38,
+                  color: AgroColors.primario,
+                  onTap: () => _verFoto(fotoUrl),
+                ),
+              ],
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
 // ============================================================================
-// 🗺️ VISTA COMPLETA: MAPA SATELITAL CON PINS POR COLOR Y TRAMPAS
+// VISTA COMPLETA: MAPA SATELITAL CON PINS POR COLOR Y TRAMPAS
 // ============================================================================
 class _MapaTrampasView extends StatefulWidget {
   final List<Map<String, dynamic>> trampas;
@@ -1542,7 +1649,7 @@ class _MapaTrampasView extends StatefulWidget {
 }
 
 class _MapaTrampasViewState extends State<_MapaTrampasView> {
-  late GoogleMapController _mapController;
+  GoogleMapController? _mapController;
   MapType _currentMapType = MapType.hybrid; // Satelital híbrido por defecto
   final Set<Marker> _markers = {};
   LatLng _initialPosition = const LatLng(-39.1250, -67.1450); // Valle Medio / Alto Valle
@@ -1580,9 +1687,9 @@ class _MapaTrampasViewState extends State<_MapaTrampasView> {
           sumLng += lng;
           count++;
 
-          final String codTr = t['cod_trampa'] ?? '';
-          final String nro = t['trampa_numero'] ?? '';
-          final String plaga = t['tipo_trampa'] ?? 'Plaga';
+          final String codTr = (t['cod_trampa'] ?? '').toString();
+          final String nro = (t['trampa_numero'] ?? '').toString();
+          final String plaga = (t['tipo_trampa'] ?? 'Plaga').toString();
 
           _markers.add(
             Marker(
@@ -1611,28 +1718,39 @@ class _MapaTrampasViewState extends State<_MapaTrampasView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.black87,
+        backgroundColor: const Color(0xFF12241B),
+        foregroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: Colors.white),
+          tooltip: 'Volver',
+          icon: const Icon(Icons.arrow_back_rounded, size: 22, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Mapa Satelital de Trampas",
+            const Text("Mapa satelital de trampas",
                 style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: Colors.white)),
-            Text(widget.nombreProductor,
+            Text("${widget.nombreProductor} · ${_markers.length} trampas",
                 style: const TextStyle(fontSize: 11, color: Colors.white70)),
           ],
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.center_focus_strong_rounded, color: Colors.white),
+            tooltip: "Centrar en las trampas",
+            onPressed: () {
+              _mapController?.animateCamera(
+                CameraUpdate.newLatLngZoom(_initialPosition, 15.5),
+              );
+            },
+          ),
+          IconButton(
             icon: Icon(
               _currentMapType == MapType.hybrid ? Icons.satellite_alt_rounded : Icons.map_outlined,
               color: Colors.white,
             ),
-            tooltip: "Alternar Capa Satélite/Normal",
+            tooltip: "Alternar capa satélite / normal",
             onPressed: () {
               setState(() {
                 _currentMapType = _currentMapType == MapType.hybrid ? MapType.normal : MapType.hybrid;
@@ -1654,16 +1772,17 @@ class _MapaTrampasViewState extends State<_MapaTrampasView> {
             onMapCreated: (controller) => _mapController = controller,
           ),
 
-          // 💡 REFERENCIAS DE PLAGAS ARRIBA
-          PositionEdgeWidget(),
+          // Referencias de plagas arriba
+          const _LeyendaPlagasMapa(),
         ],
       ),
     );
   }
 }
 
-class PositionEdgeWidget extends StatelessWidget {
-  const PositionEdgeWidget({super.key});
+/// Leyenda flotante de colores por plaga (debe ser hijo directo del Stack).
+class _LeyendaPlagasMapa extends StatelessWidget {
+  const _LeyendaPlagasMapa();
 
   @override
   Widget build(BuildContext context) {
@@ -1672,25 +1791,27 @@ class PositionEdgeWidget extends StatelessWidget {
       left: 14,
       right: 14,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.82),
+          color: Colors.black.withOpacity(0.78),
           borderRadius: BorderRadius.circular(16),
           boxShadow: const [
             BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 3)),
           ],
         ),
-        child: SingleChildScrollView(
+        child: const SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
-            children: const [
+            children: [
               _RefChip(label: "Carpocapsa", color: Colors.red),
-              SizedBox(width: 10),
+              SizedBox(width: 12),
               _RefChip(label: "Grafolita", color: Colors.orange),
-              SizedBox(width: 10),
+              SizedBox(width: 12),
               _RefChip(label: "Mosca Frutos", color: Colors.yellow),
-              SizedBox(width: 10),
+              SizedBox(width: 12),
               _RefChip(label: "Psílido", color: Colors.cyan),
+              SizedBox(width: 12),
+              _RefChip(label: "Otras", color: Colors.purple),
             ],
           ),
         ),
@@ -1707,6 +1828,7 @@ class _RefChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           width: 9,
@@ -1718,6 +1840,207 @@ class _RefChip extends StatelessWidget {
             style: const TextStyle(
                 color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
       ],
+    );
+  }
+}
+
+// ============================================================
+// STEPPER DE CONTEO (+ / −)
+// ============================================================
+
+class _StepperConteo extends StatelessWidget {
+  final String titulo;
+  final Color color;
+  final TextEditingController ctrl;
+  final VoidCallback onChanged;
+
+  const _StepperConteo({
+    required this.titulo,
+    required this.color,
+    required this.ctrl,
+    required this.onChanged,
+  });
+
+  int _valor() => int.tryParse(ctrl.text.trim()) ?? 0;
+
+  void _set(int v) {
+    ctrl.text = '${v < 0 ? 0 : v}';
+    onChanged();
+  }
+
+  Widget _boton(IconData icono, VoidCallback onTap, {bool relleno = false}) {
+    return Material(
+      color: relleno ? color : AgroTheme.colorSurface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: relleno ? color : AgroTheme.colorBorder),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: Icon(icono, size: 24, color: relleno ? Colors.white : color),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: AgroTheme.colorBg,
+        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+        border: Border.all(color: AgroTheme.colorBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 34,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              titulo,
+              maxLines: 2,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AgroTheme.colorText,
+              ),
+            ),
+          ),
+          _boton(Icons.remove_rounded, () => _set(_valor() - 1)),
+          SizedBox(
+            width: 60,
+            child: TextField(
+              controller: ctrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                color: AgroTheme.colorText,
+              ),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 8),
+              ),
+              onTap: () {
+                ctrl.selection =
+                    TextSelection(baseOffset: 0, extentOffset: ctrl.text.length);
+              },
+              onChanged: (_) => onChanged(),
+            ),
+          ),
+          _boton(Icons.add_rounded, () => _set(_valor() + 1), relleno: true),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// TILE TOGGLE (GPS / foto)
+// ============================================================
+
+class _TileToggle extends StatelessWidget {
+  final IconData icono;
+  final IconData iconoActivo;
+  final String texto;
+  final String textoActivo;
+  final String? detalle;
+  final bool activo;
+  final bool cargando;
+  final VoidCallback? onTap;
+
+  const _TileToggle({
+    required this.icono,
+    required this.iconoActivo,
+    required this.texto,
+    required this.textoActivo,
+    required this.activo,
+    this.detalle,
+    this.cargando = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = activo ? AgroColors.ok : AgroTheme.colorTextSecondary;
+    return Material(
+      color: activo ? AgroColors.okSoft : AgroTheme.colorBg,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+        side: BorderSide(
+          color: activo ? AgroColors.ok.withOpacity(0.5) : AgroTheme.colorBorder,
+        ),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 54),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                if (cargando)
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AgroColors.primario),
+                  )
+                else
+                  Icon(activo ? iconoActivo : icono, size: 20, color: color),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        cargando ? 'Obteniendo posición…' : (activo ? textoActivo : texto),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: activo ? AgroColors.ok : AgroTheme.colorText,
+                        ),
+                      ),
+                      if (detalle != null)
+                        Text(
+                          detalle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AgroText.secundario.copyWith(fontSize: 11.5),
+                        ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  activo ? Icons.check_rounded : Icons.chevron_right_rounded,
+                  size: 18,
+                  color: color,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
