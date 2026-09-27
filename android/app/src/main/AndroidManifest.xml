@@ -8,8 +8,7 @@
     <application
     android:label="Gestion Campo"
     android:name="${applicationName}"
-    android:icon="@mipmap/ic_launcher"
-    android:roundIcon="@mipmap/ic_launcher_round">
+    android:icon="@mipmap/ic_launcher">
 
         <!-- 💡 Clave oficial de Google Maps para Android -->
         <meta-data

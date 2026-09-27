@@ -1,20 +1,24 @@
-import 'dart:io';
+// ignore_for_file: deprecated_member_use
+
+import 'package:excel/excel.dart' hide Border;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:excel/excel.dart' hide Border;
 
 import '../base/base.dart';
 import '../constantes/tema.dart';
+import '../widgets/agro_ui.dart';
 import 'ordenes_generadas.dart';
 
 class AplicaProductorScreen extends StatefulWidget {
+  final int codProductor;
+  final String nombreProductor;
+
   const AplicaProductorScreen({
     super.key,
-    required int codProductor,
-    required String nombreProductor,
+    required this.codProductor,
+    required this.nombreProductor,
   });
 
   @override
@@ -26,6 +30,8 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
   int _userCodProductor = 0;
   String _filtroTexto = "";
   bool _cargando = true;
+  bool _soloConOrdenes = false;
+  bool _exportando = false;
 
   List<Map<String, dynamic>> _productores = [];
   Map<int, int> _conteoOrdenes = {};
@@ -44,17 +50,24 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
     super.dispose();
   }
 
+  // ============================================================
+  // LÓGICA
+  // ============================================================
+
   Future<void> _cargarDatos() async {
     setState(() => _cargando = true);
     final prefs = await SharedPreferences.getInstance();
-    _userRole = (prefs.getString('userRole') ?? "OPE-PROD").toUpperCase().trim();
+    _userRole =
+        (prefs.getString('userRole') ?? "OPE-PROD").toUpperCase().trim();
     _userCodProductor = prefs.getInt('userCodProductor') ?? 0;
 
     final db = await DatabaseHelper.instance.database;
 
     List<Map<String, dynamic>> listaProds = [];
 
-    if (_userRole == 'ADMIN' || _userRole == 'INGENIERO' || _userRole == 'OPE-APLI') {
+    if (_userRole == 'ADMIN' ||
+        _userRole == 'INGENIERO' ||
+        _userRole == 'OPE-APLI') {
       listaProds = await db.query(
         'productores',
         where: 'estado = ?',
@@ -69,14 +82,18 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
       );
     }
 
+    // Una sola consulta agrupada (antes era una consulta por productor).
     final Map<int, int> mapaConteo = {};
-    for (var prod in listaProds) {
-      final int cod = prod['cod_productor'] as int;
-      final res = await db.rawQuery(
-        'SELECT COUNT(DISTINCT cod_orden) as total FROM recetas_aplicaciones WHERE cod_productor = ? AND habilitado = ?',
-        [cod, 'ACTIVO'],
-      );
-      mapaConteo[cod] = (res.first['total'] as int?) ?? 0;
+    final res = await db.rawQuery(
+      'SELECT cod_productor, COUNT(DISTINCT cod_orden) as total '
+      'FROM recetas_aplicaciones WHERE habilitado = ? GROUP BY cod_productor',
+      ['ACTIVO'],
+    );
+    for (final r in res) {
+      final cod = int.tryParse(r['cod_productor']?.toString() ?? '');
+      if (cod != null) {
+        mapaConteo[cod] = int.tryParse(r['total']?.toString() ?? '0') ?? 0;
+      }
     }
 
     if (!mounted) return;
@@ -88,13 +105,17 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
   }
 
   List<Map<String, dynamic>> get _productoresFiltrados {
-    if (_filtroTexto.isEmpty) return _productores;
+    final query = _filtroTexto.toLowerCase().trim();
     return _productores.where((p) {
+      if (_soloConOrdenes) {
+        final cod = p['cod_productor'] as int;
+        if ((_conteoOrdenes[cod] ?? 0) == 0) return false;
+      }
+      if (query.isEmpty) return true;
       final nombre = (p['productor'] ?? '').toString().toLowerCase();
       final cuit = (p['cuit'] ?? '').toString().toLowerCase();
       final renspa = (p['renspa'] ?? '').toString().toLowerCase();
       final loc = (p['localidad'] ?? '').toString().toLowerCase();
-      final query = _filtroTexto.toLowerCase();
       return nombre.contains(query) ||
           cuit.contains(query) ||
           renspa.contains(query) ||
@@ -102,13 +123,21 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
     }).toList();
   }
 
+  // Solo suma los productores visibles para el usuario (el GROUP BY trae todos).
+  int get _totalOrdenesActivas => _productores.fold<int>(
+      0, (a, p) => a + (_conteoOrdenes[p['cod_productor'] as int] ?? 0));
+
+  int get _productoresConOrdenes => _productores
+      .where((p) => (_conteoOrdenes[p['cod_productor'] as int] ?? 0) > 0)
+      .length;
+
   Future<void> _exportarExcelProductores() async {
+    setState(() => _exportando = true);
     try {
       final excel = Excel.createExcel();
       final sheet = excel['Productores'];
       excel.delete('Sheet1');
 
-      // Estilos de encabezado
       final headerStyle = CellStyle(
         bold: true,
         fontColorHex: ExcelColor.white,
@@ -127,7 +156,8 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
       ];
 
       for (int i = 0; i < headers.length; i++) {
-        final cell = sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
+        final cell =
+            sheet.cell(CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0));
         cell.value = TextCellValue(headers[i]);
         cell.cellStyle = headerStyle;
       }
@@ -137,40 +167,57 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
         final cod = p['cod_productor'] as int;
         final totalOrd = _conteoOrdenes[cod] ?? 0;
 
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value =
-            IntCellValue(cod);
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value =
-            TextCellValue(p['productor']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value =
-            TextCellValue(p['cuit']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value =
-            TextCellValue(p['renspa']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value =
-            TextCellValue(p['localidad']?.toString() ?? '');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value =
-            TextCellValue(p['estado']?.toString() ?? 'ACTIVO');
-        sheet.cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value =
-            IntCellValue(totalOrd);
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx))
+            .value = IntCellValue(cod);
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx))
+            .value = TextCellValue(p['productor']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx))
+            .value = TextCellValue(p['cuit']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx))
+            .value = TextCellValue(p['renspa']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx))
+            .value = TextCellValue(p['localidad']?.toString() ?? '');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx))
+            .value = TextCellValue(p['estado']?.toString() ?? 'ACTIVO');
+        sheet
+            .cell(CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx))
+            .value = IntCellValue(totalOrd);
         rowIdx++;
       }
 
-      final fileBytes = excel.save();
-      if (fileBytes == null) return;
+      const nombreArchivo = "Resumen_Productores_AgroSoft.xlsx";
 
-      final tempDir = await getTemporaryDirectory();
-      final filePath = "${tempDir.path}/Resumen_Productores_AgroSoft.xlsx";
-      final file = File(filePath);
-      await file.writeAsBytes(fileBytes);
-
-      await Share.shareXFiles(
-        [XFile(filePath)],
-        subject: "Listado de Productores - AgroSoft J&L",
-      );
+      if (kIsWeb) {
+        // En web, el paquete excel dispara la descarga directa en el navegador.
+        excel.save(fileName: nombreArchivo);
+      } else {
+        final fileBytes = excel.save();
+        if (fileBytes == null) return;
+        // XFile.fromData evita dart:io → compatible con todas las plataformas.
+        await Share.shareXFiles(
+          [
+            XFile.fromData(
+              Uint8List.fromList(fileBytes),
+              name: nombreArchivo,
+              mimeType:
+                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
+          ],
+          subject: "Listado de Productores - AgroSoft J&L",
+        );
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: const Color(0xFFC62828), content: Text("Error al exportar Excel: $e")),
-      );
+      mostrarAgroSnack(context, "Error al exportar Excel: $e",
+          tipo: AgroSnackTipo.error);
+    } finally {
+      if (mounted) setState(() => _exportando = false);
     }
   }
 
@@ -185,133 +232,216 @@ class _AplicaProductorScreenState extends State<AplicaProductorScreen> {
           renspa: productor['renspa'] ?? 'S/D',
         ),
       ),
-    );
+    ).then((_) => _cargarDatos());
   }
+
+  // ============================================================
+  // UI
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
+    final esMovil = AgroBreakpoints.esMovil(context);
+    final filtrados = _productoresFiltrados;
+
     return Scaffold(
       backgroundColor: AgroTheme.colorBg,
-      appBar: AppBar(
-        backgroundColor: AgroTheme.colorSurface.withOpacity(0.92),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AgroTheme.colorText),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Seleccionar Productor",
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16.5, color: AgroTheme.colorText),
-            ),
-            Text(
-              "Rol activo: $_userRole",
-              style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
-            ),
-          ],
-        ),
-        actions: [
-          // Botón Exportar a Excel
-          IconButton(
-            icon: const Icon(Icons.table_view_rounded, color: Color(0xFF2E7D32)),
-            tooltip: "Exportar listado a Excel",
-            onPressed: _productoresFiltrados.isEmpty ? null : _exportarExcelProductores,
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E6B4C)),
+      appBar: AgroAppBar(
+        titulo: "Órdenes de Aplicación",
+        subtitulo: "Elegí un productor · Rol: $_userRole",
+        acciones: [
+          AgroIconButton(
+            icono: Icons.refresh_rounded,
             tooltip: "Recargar",
-            onPressed: _cargarDatos,
+            onTap: _cargando ? null : _cargarDatos,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
+          if (esMovil)
+            AgroIconButton(
+              icono: Icons.table_view_rounded,
+              tooltip: "Exportar listado a Excel",
+              color: AgroColors.ok,
+              onTap: filtrados.isEmpty || _exportando
+                  ? null
+                  : _exportarExcelProductores,
+            )
+          else
+            AgroButton(
+              label: "Exportar Excel",
+              icono: Icons.table_view_rounded,
+              tipo: AgroButtonTipo.secundario,
+              compacto: true,
+              cargando: _exportando,
+              onTap: filtrados.isEmpty ? null : _exportarExcelProductores,
+            ),
         ],
       ),
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1100),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: AgroTheme.colorSurface,
-                      borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-                      border: Border.all(color: AgroTheme.colorBorder),
-                      boxShadow: const [
-                        BoxShadow(color: Color(0x04141E18), blurRadius: 8, offset: Offset(0, 2)),
-                      ],
-                    ),
-                    child: TextField(
-                      controller: _searchController,
-                      onChanged: (val) => setState(() => _filtroTexto = val),
-                      style: const TextStyle(color: AgroTheme.colorText, fontSize: 13.5),
-                      decoration: InputDecoration(
-                        hintText: "Buscar por nombre, CUIT, RENSPA o localidad...",
-                        hintStyle: const TextStyle(color: AgroTheme.colorTextSecondary, fontSize: 13),
-                        prefixIcon: const Icon(Icons.search_rounded, color: AgroTheme.colorTextSecondary, size: 20),
-                        suffixIcon: _filtroTexto.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear, size: 18, color: AgroTheme.colorTextSecondary),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() => _filtroTexto = "");
-                                },
-                              )
-                            : null,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 13),
+        child: _cargando
+            ? const AgroLoading(mensaje: 'Cargando productores…')
+            : RefreshIndicator(
+                color: AgroColors.primario,
+                onRefresh: _cargarDatos,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: AgroContent(
+                        maxWidth: 1180,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 18, bottom: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildResumen(),
+                              const SizedBox(height: 14),
+                              _buildFiltros(esMovil),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                Expanded(
-                  child: _cargando
-                      ? const Center(child: CircularProgressIndicator(color: Color(0xFF1E6B4C)))
-                      : _productoresFiltrados.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: const [
-                                  Icon(Icons.person_search_outlined, size: 44, color: AgroTheme.colorTextSecondary),
-                                  SizedBox(height: 12),
-                                  Text(
-                                    "No se encontraron productores",
-                                    style: TextStyle(fontWeight: FontWeight.w700, color: AgroTheme.colorTextSecondary, fontSize: 15),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(20, 4, 20, 80),
-                              itemCount: _productoresFiltrados.length,
-                              // ignore: unnecessary_underscores
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final prod = _productoresFiltrados[index];
-                                final codProd = prod['cod_productor'] as int;
-                                final ordenesCount = _conteoOrdenes[codProd] ?? 0;
-
-                                return _ProductorCard(
-                                  productor: prod,
-                                  totalOrdenes: ordenesCount,
-                                  onTap: () => _navegarAOrdenes(prod),
+                    if (filtrados.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: AgroEmptyState(
+                          icono: Icons.person_search_outlined,
+                          titulo: "No se encontraron productores",
+                          mensaje: _filtroTexto.isNotEmpty || _soloConOrdenes
+                              ? "Probá con otro término de búsqueda o quitá los filtros."
+                              : "No hay productores activos asignados a tu usuario.",
+                          accion: _filtroTexto.isNotEmpty || _soloConOrdenes
+                              ? AgroButton(
+                                  label: 'Limpiar filtros',
+                                  icono: Icons.filter_alt_off_rounded,
+                                  tipo: AgroButtonTipo.secundario,
+                                  onTap: () {
+                                    _searchController.clear();
+                                    setState(() {
+                                      _filtroTexto = '';
+                                      _soloConOrdenes = false;
+                                    });
+                                  },
+                                )
+                              : null,
+                        ),
+                      )
+                    else
+                      SliverToBoxAdapter(
+                        child: AgroContent(
+                          maxWidth: 1180,
+                          child: Padding(
+                            padding: const EdgeInsets.only(bottom: 40),
+                            child: LayoutBuilder(
+                              builder: (context, c) {
+                                final cols = c.maxWidth >= 1000
+                                    ? 3
+                                    : (c.maxWidth >= 640 ? 2 : 1);
+                                const gap = 12.0;
+                                final w =
+                                    ((c.maxWidth - gap * (cols - 1)) / cols)
+                                        .floorToDouble();
+                                return Wrap(
+                                  spacing: gap,
+                                  runSpacing: gap,
+                                  children: filtrados.map((prod) {
+                                    final codProd =
+                                        prod['cod_productor'] as int;
+                                    return SizedBox(
+                                      width: w,
+                                      child: _ProductorCard(
+                                        productor: prod,
+                                        totalOrdenes:
+                                            _conteoOrdenes[codProd] ?? 0,
+                                        onTap: () => _navegarAOrdenes(prod),
+                                      ),
+                                    );
+                                  }).toList(),
                                 );
                               },
                             ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-        ),
+              ),
       ),
+    );
+  }
+
+  Widget _buildResumen() {
+    return AgroStatGrid(
+      fondo: AgroTheme.colorSurface,
+      stats: [
+        AgroStat(
+          label: 'Productores',
+          valor: '${_productores.length}',
+          icono: Icons.groups_2_outlined,
+        ),
+        AgroStat(
+          label: 'Con órdenes activas',
+          valor: '$_productoresConOrdenes',
+          icono: Icons.assignment_turned_in_outlined,
+          color: AgroColors.ok,
+        ),
+        AgroStat(
+          label: 'Órdenes activas',
+          valor: '$_totalOrdenesActivas',
+          icono: Icons.pending_actions_rounded,
+          color: AgroColors.warn,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFiltros(bool esMovil) {
+    final buscador = AgroSearchField(
+      controller: _searchController,
+      hint: "Buscar por nombre, CUIT, RENSPA o localidad…",
+      onChanged: (val) => setState(() => _filtroTexto = val),
+    );
+
+    final filtro = FilterChip(
+      label: const Text('Solo con órdenes activas'),
+      selected: _soloConOrdenes,
+      onSelected: (v) => setState(() => _soloConOrdenes = v),
+      showCheckmark: true,
+      checkmarkColor: AgroColors.primario,
+      selectedColor: AgroColors.primarioSoft,
+      backgroundColor: AgroTheme.colorSurface,
+      side: BorderSide(
+        color: _soloConOrdenes ? AgroColors.primario : AgroTheme.colorBorder,
+      ),
+      labelStyle: TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w700,
+        color: _soloConOrdenes ? AgroColors.primario : AgroTheme.colorText,
+      ),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AgroTheme.radiusMd)),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+    );
+
+    if (esMovil) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [buscador, const SizedBox(height: 10), filtro],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: buscador),
+        const SizedBox(width: 12),
+        filtro,
+      ],
     );
   }
 }
 
-
+// ============================================================
+// TARJETA DE PRODUCTOR
+// ============================================================
 
 class _ProductorCard extends StatelessWidget {
   final Map<String, dynamic> productor;
@@ -324,102 +454,110 @@ class _ProductorCard extends StatelessWidget {
     required this.onTap,
   });
 
+  String _iniciales(String nombre) {
+    final partes =
+        nombre.trim().split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    if (partes.isEmpty) return '?';
+    if (partes.length == 1) return partes.first[0].toUpperCase();
+    return (partes[0][0] + partes[1][0]).toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final nombre = productor['productor'] ?? 'Sin Nombre';
-    final cuit = productor['cuit'] ?? 'S/D';
-    final renspa = productor['renspa'] ?? 'S/D';
-    final localidad = productor['localidad'] ?? 'Sin Localidad';
+    final String nombre = productor['productor']?.toString() ?? 'Sin nombre';
+    final String cuit = productor['cuit']?.toString() ?? 'S/D';
+    final String renspa = productor['renspa']?.toString() ?? 'S/D';
+    final String localidad =
+        productor['localidad']?.toString() ?? 'Sin localidad';
+    final bool tieneOrdenes = totalOrdenes > 0;
 
-    return InkWell(
+    return AgroCard(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: AgroTheme.colorSurface,
-          borderRadius: BorderRadius.circular(AgroTheme.radiusMd),
-          border: Border.all(color: AgroTheme.colorBorder),
-          boxShadow: const [
-            BoxShadow(color: Color(0x03141E18), blurRadius: 4, offset: Offset(0, 1.5)),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F5E9),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.business_outlined, color: Color(0xFF2E7D32), size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          nombre,
-                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: AgroTheme.colorText),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                        decoration: BoxDecoration(
-                          color: totalOrdenes > 0 ? const Color(0xFFE8F5E9) : const Color(0xFFECEFF1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          "$totalOrdenes ${totalOrdenes == 1 ? 'orden' : 'órdenes'}",
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: totalOrdenes > 0 ? const Color(0xFF2E7D32) : const Color(0xFF546E7A),
-                          ),
-                        ),
-                      ),
-                    ],
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: tieneOrdenes
+                      ? AgroColors.primarioSoft
+                      : AgroColors.neutralSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  _iniciales(nombre),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                    color: tieneOrdenes
+                        ? AgroColors.primario
+                        : AgroColors.neutral,
                   ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          "CUIT: $cuit  ·  RENSPA: $renspa",
-                          style: const TextStyle(fontSize: 11.5, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w500),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.location_on_outlined, size: 12, color: AgroTheme.colorTextSecondary),
-                          const SizedBox(width: 2),
-                          Text(
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      nombre,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AgroText.tituloCard.copyWith(fontSize: 14.5),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on_outlined,
+                            size: 13, color: AgroTheme.colorTextSecondary),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
                             localidad,
-                            style: const TextStyle(fontSize: 11, color: AgroTheme.colorTextSecondary, fontWeight: FontWeight.w600),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AgroText.secundario.copyWith(fontSize: 12),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded, size: 20, color: AgroTheme.colorTextSecondary),
-          ],
-        ),
+              const Icon(Icons.chevron_right_rounded,
+                  color: AgroTheme.colorTextSecondary),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: AgroTheme.colorBorder),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  "CUIT $cuit  ·  RENSPA $renspa",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AgroText.secundario.copyWith(fontSize: 11.5),
+                ),
+              ),
+              const SizedBox(width: 8),
+              AgroBadge(
+                texto:
+                    "$totalOrdenes ${totalOrdenes == 1 ? 'orden activa' : 'órdenes activas'}",
+                color: tieneOrdenes ? AgroColors.ok : AgroColors.neutral,
+                fondo: tieneOrdenes ? AgroColors.okSoft : AgroColors.neutralSoft,
+                icono: tieneOrdenes ? Icons.circle : null,
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

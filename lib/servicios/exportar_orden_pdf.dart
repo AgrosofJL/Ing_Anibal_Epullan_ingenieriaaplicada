@@ -3,6 +3,8 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import '../aplicaciones/calculo_dosis.dart';
+import '../aplicaciones/orden_cuadros.dart';
 import '../base/base.dart';
 
 class ServicioExportarOrdenPdf {
@@ -15,6 +17,7 @@ class ServicioExportarOrdenPdf {
   static const PdfColor colorTextoPrincipal = PdfColor.fromInt(0xFF1A2E22);
   static const PdfColor colorTextoSecundario = PdfColor.fromInt(0xFF5A6E62);
   static const PdfColor colorDoradoPastel = PdfColor.fromInt(0xFFFFF8E1);
+  static const PdfColor colorVerdeSuave = PdfColor.fromInt(0xFFE6F2EC);
 
   static Future<Uint8List> generarBytesPdf({
     required Map<String, dynamic> orden,
@@ -42,7 +45,20 @@ class ServicioExportarOrdenPdf {
         ? orden['cod_orden']
         : int.tryParse(orden['cod_orden']?.toString() ?? '0') ?? 0;
     final String fecha = orden['fecha']?.toString() ?? 'S/F';
-    final String chacra = orden['chacra']?.toString() ?? 'S/D';
+    // Una o varias chacras (formato "5, 7" / cuadros "5:1, 7:3").
+    final List<String> chacrasOrden =
+        chacrasDeOrden(orden['chacra'], orden['cuadros']);
+    final String chacra =
+        chacrasOrden.isEmpty ? 'S/D' : chacrasOrden.join(', ');
+    final bool variasChacras = chacrasOrden.length > 1;
+
+    // Cultivos / variedades a tratar (vacío = todos)
+    final Set<String> cultivosF = parsearFiltroOrden(orden['cultivos']);
+    final Set<String> variedadesF = parsearFiltroOrden(orden['variedades']);
+    final String cultivosTxt = [
+      cultivosF.isEmpty ? 'Todos' : (cultivosF.toList()..sort()).join(', '),
+      if (variedadesF.isNotEmpty) '(${(variedadesF.toList()..sort()).join(', ')})',
+    ].join(' ');
     final String motivo = orden['motivo']?.toString() ?? 'Aplicación Foliar';
     final String momento = orden['momento']?.toString() ?? 'S/D';
     final String volHa = (orden['vol_ha']?.toString() ?? '1000').replaceAll('.0', '');
@@ -75,6 +91,29 @@ class ServicioExportarOrdenPdf {
     final String velAvance = parametros['Vel_Aplicacion']?.toString() ?? '5.5 km/h';
     final String caudalHa = parametros['Caudal_Ha']?.toString() ?? '$volHa L/Ha';
 
+    // Caldo por hectárea para los cálculos de consumo.
+    // En recetas_aplicaciones, vol_aplic_ha de cada fila guarda la dosis/Ha
+    // (dosis_ha) o 0 (vol_100), así que el caldo real se toma de los
+    // parámetros o de la cabecera de la orden.
+    double caldoHa = _primerNumero(parametros['Caudal_Ha']) ?? 0.0;
+    if (caldoHa <= 0) {
+      try {
+        final db = await DatabaseHelper.instance.database;
+        final cab = await db.query(
+          'ordenes_aplicaciones',
+          columns: ['vol_aplic_ha'],
+          where: 'cod_orden = ?',
+          whereArgs: [codOrden.toString()],
+          limit: 1,
+        );
+        if (cab.isNotEmpty) {
+          caldoHa = _primerNumero(cab.first['vol_aplic_ha']) ?? 0.0;
+        }
+      } catch (_) {}
+    }
+    if (caldoHa <= 0) caldoHa = _primerNumero(volHa) ?? 0.0;
+    if (caldoHa <= 0) caldoHa = 1000.0;
+
     pdf.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -91,7 +130,9 @@ class ServicioExportarOrdenPdf {
             cuit: cuit,
             renspa: renspa,
             chacra: chacra,
+            variasChacras: variasChacras,
             responsable: responsable,
+            cultivos: cultivosTxt,
           ),
           pw.SizedBox(height: 10),
 
@@ -113,13 +154,13 @@ class ServicioExportarOrdenPdf {
           // 4. PRIMERO: Receta Foliar, Dosis y Consumo de Caldo
           _buildSeccionTitulo("Receta de Insumos, Dosificación y Consumo de Caldo"),
           pw.SizedBox(height: 5),
-          _buildTablaInsumosConConsumo(items, supTotal, volHa),
+          _buildTablaInsumosConConsumo(items, supTotal, caldoHa),
           pw.SizedBox(height: 12),
 
           // 5. LUEGO: Detalle de Cuadros a Tratar
           _buildSeccionTitulo("Cuadros y Cuarteles Asignados (${cuadrosDetalle.length})"),
           pw.SizedBox(height: 5),
-          _buildTablaCuadros(cuadrosDetalle, supTotal),
+          _buildTablaCuadros(cuadrosDetalle, supTotal, variasChacras),
           pw.SizedBox(height: 18),
 
           // 6. Firmas
@@ -280,7 +321,9 @@ class ServicioExportarOrdenPdf {
     required String cuit,
     required String renspa,
     required String chacra,
+    bool variasChacras = false,
     required String responsable,
+    String cultivos = 'Todos',
   }) {
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -308,7 +351,9 @@ class ServicioExportarOrdenPdf {
             child: pw.Column(
               
               children: [
-                _buildDatoLinea("Chacra:", chacra, bold: true),
+                _buildDatoLinea(
+                    variasChacras ? "Chacras:" : "Chacra:", chacra,
+                    bold: true),
                 pw.SizedBox(height: 2),
                 _buildDatoLinea("RENSPA:", renspa),
               ],
@@ -321,7 +366,7 @@ class ServicioExportarOrdenPdf {
               children: [
                 _buildDatoLinea("Responsable:", responsable),
                 pw.SizedBox(height: 2),
-                _buildDatoLinea("Estado:", "HABILITADO"),
+                _buildDatoLinea("Cultivos:", cultivos, bold: true),
               ],
             ),
           ),
@@ -390,10 +435,8 @@ class ServicioExportarOrdenPdf {
   static pw.Widget _buildTablaInsumosConConsumo(
     List<Map<String, dynamic>> items,
     double supTotal,
-    String volHaStr,
+    double caldoHa,
   ) {
-    final double volHa = double.tryParse(volHaStr) ?? 1000.0;
-
     return pw.Table(
       border: pw.TableBorder.all(color: colorGrisBorde, width: 0.7),
       children: [
@@ -413,30 +456,45 @@ class ServicioExportarOrdenPdf {
           final idx = entry.key + 1;
           final it = entry.value;
           final prod = it['producto']?.toString() ?? 'Insumo';
-          final d100 = it['dosis_100']?.toString() ?? '0';
-          final dMaq = (double.tryParse(it['dosis_maq']?.toString() ?? '0') ?? 0.0)
-              .toStringAsFixed(2);
           final tc = it['tc']?.toString() ?? it['T_C']?.toString() ?? '0';
           final ti = it['ti']?.toString() ?? it['TRI']?.toString() ?? '0';
 
-          final double d100Num = double.tryParse(d100) ?? 0.0;
-          // Consumo total = (Dosis / 100L) * (Volumen de Caldo Total / 100)
-          final double caldoTotalLitros = supTotal * volHa;
-          final double consumoTotalCalculado = (d100Num * caldoTotalLitros) / 100.0;
+          // Por 100 L: cantMaq = Sup × caldo ÷ 2000 ; total = cantMaq × dosisMaq
+          // Por Ha   : total = dosis/Ha × Sup
+          final double dosisMaq = CalculoDosis.dosisMaquina(it, caldoHa);
+          final double consumoTotal =
+              CalculoDosis.cantidadProducto(it, supTotal, caldoHa);
 
           return pw.TableRow(
             children: [
               _buildCelda("$idx", align: pw.TextAlign.center),
               _buildCelda(prod, bold: true),
-              _buildCelda("$d100 /100L", align: pw.TextAlign.center),
-              _buildCelda("$dMaq L/Kg", align: pw.TextAlign.right, bold: true),
-              _buildCelda("${consumoTotalCalculado.toStringAsFixed(2)} L/Kg",
+              _buildCelda(CalculoDosis.textoDosis(it), align: pw.TextAlign.center),
+              _buildCelda("${dosisMaq.toStringAsFixed(2)} L/Kg",
+                  align: pw.TextAlign.right, bold: true),
+              _buildCelda("${consumoTotal.toStringAsFixed(2)} L/Kg",
                   align: pw.TextAlign.right, bold: true),
               _buildCelda("${tc}d", align: pw.TextAlign.center),
               _buildCelda("${ti}hs", align: pw.TextAlign.center),
             ],
           );
         }),
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: colorDoradoPastel),
+          children: [
+            _buildCelda(""),
+            _buildCelda(
+                "Máquinas de ${CalculoDosis.volumenMaquina.toStringAsFixed(0)} L: "
+                "${CalculoDosis.cantidadMaquinas(supTotal, caldoHa).toStringAsFixed(2)}  "
+                "(${supTotal.toStringAsFixed(2)} Ha × ${caldoHa.toStringAsFixed(0)} L/Ha)",
+                bold: true),
+            _buildCelda(""),
+            _buildCelda(""),
+            _buildCelda(""),
+            _buildCelda(""),
+            _buildCelda(""),
+          ],
+        ),
       ],
     );
   }
@@ -444,7 +502,54 @@ class ServicioExportarOrdenPdf {
   static pw.Widget _buildTablaCuadros(
     List<Map<String, dynamic>> cuadrosDetalle,
     double supTotal,
+    bool variasChacras,
   ) {
+    pw.TableRow filaCuadro(Map<String, dynamic> c) {
+      final String nomCuadro = c['cuadro']?.toString() ?? 'S/N';
+      final String cultivo = c['cultivo']?.toString() ?? 'Frutales';
+      final String variedad = c['variedad']?.toString() ?? 'S/D';
+      final double ha = double.tryParse(c['ha']?.toString() ?? '0') ?? 0.0;
+      return pw.TableRow(
+        children: [
+          _buildCelda("Cuadro $nomCuadro", bold: true),
+          _buildCelda(cultivo.isEmpty ? "General" : cultivo),
+          _buildCelda(variedad),
+          _buildCelda("${ha.toStringAsFixed(2)} Ha", align: pw.TextAlign.right),
+        ],
+      );
+    }
+
+    final List<pw.TableRow> cuerpo = [];
+
+    if (!variasChacras) {
+      cuerpo.addAll(cuadrosDetalle.map(filaCuadro));
+    } else {
+      // Agrupado por chacra, con subtotal de cada una.
+      final Map<String, List<Map<String, dynamic>>> grupos = {};
+      for (final c in cuadrosDetalle) {
+        final ch = (c['chacra'] ?? 'S/D').toString();
+        grupos.putIfAbsent(ch, () => []).add(c);
+      }
+      final claves = grupos.keys.toList()..sort(compararNatural);
+      for (final ch in claves) {
+        final filas = grupos[ch]!;
+        final double sub = filas.fold(
+            0.0, (s, c) => s + (double.tryParse(c['ha']?.toString() ?? '0') ?? 0.0));
+        cuerpo.add(pw.TableRow(
+          decoration: const pw.BoxDecoration(color: colorVerdeSuave),
+          children: [
+            _buildCelda("CHACRA $ch", bold: true, color: colorVerdeBosque),
+            _buildCelda("${filas.length} ${filas.length == 1 ? 'cuadro' : 'cuadros'}",
+                color: colorVerdeBosque),
+            _buildCelda(""),
+            _buildCelda("${sub.toStringAsFixed(2)} Ha",
+                align: pw.TextAlign.right, bold: true, color: colorVerdeBosque),
+          ],
+        ));
+        cuerpo.addAll(filas.map(filaCuadro));
+      }
+    }
+
     return pw.Table(
       border: pw.TableBorder.all(color: colorGrisBorde, width: 0.7),
       children: [
@@ -457,27 +562,13 @@ class ServicioExportarOrdenPdf {
             _buildCeldaHeader("Superficie Tratada", align: pw.TextAlign.right),
           ],
         ),
-        ...cuadrosDetalle.map((c) {
-          final String nomCuadro = c['cuadro']?.toString() ?? 'S/N';
-          final String cultivo = c['cultivo']?.toString() ?? 'Frutales';
-          final String variedad = c['variedad']?.toString() ?? 'S/D';
-          final double ha = double.tryParse(c['ha']?.toString() ?? '0') ?? 0.0;
-
-          return pw.TableRow(
-            children: [
-              _buildCelda("Cuadro $nomCuadro", bold: true),
-              _buildCelda(cultivo.isEmpty ? "General" : cultivo),
-              _buildCelda(variedad),
-              _buildCelda("${ha.toStringAsFixed(2)} Ha", align: pw.TextAlign.right),
-            ],
-          );
-        }),
+        ...cuerpo,
         pw.TableRow(
           decoration: const pw.BoxDecoration(color: colorDoradoPastel),
           children: [
-            _buildCelda("TOTAL SUPERFICIE TRATADA", bold: true, colSpan: 3),
-            _buildCelda("", colSpan: 0),
-            _buildCelda("", colSpan: 0),
+            _buildCelda("TOTAL SUPERFICIE TRATADA", bold: true),
+            _buildCelda(""),
+            _buildCelda(""),
             _buildCelda("${supTotal.toStringAsFixed(2)} Ha", align: pw.TextAlign.right, bold: true),
           ],
         ),
@@ -621,6 +712,7 @@ class ServicioExportarOrdenPdf {
     bool bold = false,
     int colSpan = 1,
     pw.TextAlign align = pw.TextAlign.left,
+    PdfColor color = colorTextoPrincipal,
   }) {
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
@@ -630,9 +722,19 @@ class ServicioExportarOrdenPdf {
         style: pw.TextStyle(
           fontSize: 8,
           fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-          color: colorTextoPrincipal,
+          color: color,
         ),
       ),
     );
   }
+
+  /// Primer número dentro de un texto: "1000 L/Ha" → 1000.
+  static double? _primerNumero(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    final m = RegExp(r'\d+(?:[.,]\d+)?').firstMatch(v.toString());
+    if (m == null) return null;
+    return double.tryParse(m.group(0)!.replaceAll(',', '.'));
+  }
+
 }

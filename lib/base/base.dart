@@ -30,7 +30,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -102,6 +102,8 @@ class DatabaseHelper {
         ti TEXT,
         habilitado TEXT,
         dosis_x TEXT,
+        cultivos TEXT,
+        variedades TEXT,
         sincronizado INTEGER DEFAULT 1
       )
     ''');
@@ -238,6 +240,8 @@ await db.execute('''
         responsable TEXT,
         estado TEXT,
         vol_100 REAL,
+        cultivos TEXT,
+        variedades TEXT,
         sincronizado INTEGER DEFAULT 1
       )
     ''');
@@ -387,6 +391,28 @@ await db.execute('''
           sincronizado INTEGER DEFAULT 1
         )
       ''');
+    }
+    if (oldV < 10) {
+      // Cultivos / variedades a tratar de cada orden.
+      await _agregarColumnaSiFalta(db, 'recetas_aplicaciones', 'cultivos', 'TEXT');
+      await _agregarColumnaSiFalta(db, 'recetas_aplicaciones', 'variedades', 'TEXT');
+      await _agregarColumnaSiFalta(db, 'ordenes_aplicaciones', 'cultivos', 'TEXT');
+      await _agregarColumnaSiFalta(db, 'ordenes_aplicaciones', 'variedades', 'TEXT');
+    }
+  }
+
+  Future<void> _agregarColumnaSiFalta(
+      Database db, String tabla, String columna, String tipo) async {
+    try {
+      final existe = await db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+          [tabla]);
+      if (existe.isEmpty) return;
+      final cols = await db.rawQuery('PRAGMA table_info("$tabla")');
+      if (cols.any((c) => c['name'].toString() == columna)) return;
+      await db.execute('ALTER TABLE "$tabla" ADD COLUMN $columna $tipo');
+    } catch (e) {
+      debugPrint('Aviso agregando $tabla.$columna: $e');
     }
   }
 

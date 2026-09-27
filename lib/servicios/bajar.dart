@@ -2,9 +2,11 @@ import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show SupabaseClient;
 
 import '../base/base.dart';
 import 'conexion.dart';
+import 'sync_esquema.dart';
 
 class LicenciaInactivaException implements Exception {
   final String mensaje;
@@ -120,152 +122,222 @@ class ServicioBajar {
     return valorArriba.toString().trim() == valorAbajo.toString().trim();
   }
 
-  // 💡 2. Descarga diferencial verificando diferencias con lo de arriba
-  // 💡 Descarga diferencial para TODAS las plataformas (incluyendo Web con SQLite local)
-  static Future<bool> bajarIncremental({BuildContext? context}) async {
+  // 💡 2. Descarga completa y diferencial de TODAS las tablas (Web y móvil)
+  //
+  // Reglas:
+  //  • Si el registro no existe localmente → se inserta.
+  //  • Si existe y es distinto → se reemplaza por el del servidor,
+  //    SALVO que tenga cambios locales sin subir (sincronizado = 0).
+  //  • Si está en la cola de eliminados → no se vuelve a bajar.
+  //  • Reconciliación: si un registro local sincronizado ya no existe en el
+  //    servidor (lo borró otro dispositivo), se borra localmente.
+  //    Solo se hace si la tabla se descargó completa y sin errores.
+  static Future<bool> bajarIncremental({
+    BuildContext? context,
+    void Function(String)? onProgreso,
+  }) async {
     final bool rolCambio = await verificarLicencia(context: context);
-
-    // ❌ ELIMINADO: if (kIsWeb) return rolCambio; -> Ahora la Web sí baja los datos a IndexedDB
 
     final client = SupabaseService.client;
     final db = await DatabaseHelper.instance.database;
 
-    final tablas = [
-      {'nombre': 'usuarios', 'pk': 'id'},
-      {'nombre': 'rubros_insumos', 'pk': 'codigo'},
-      {'nombre': 'productores', 'pk': 'cod_productor'},
-      {'nombre': 'motivos_aplicaciones', 'pk': 'cod'},
-      {'nombre': 'inventario_plantacion', 'pk': 'id'},
-      {'nombre': 'cuadros', 'pk': 'cod_cuadro'},
-      {'nombre': 'catalogo_insumos', 'pk': 'ID_Insumos'},
-      // 💡 ACA ES LO NUEVO
-      {'nombre': 'ordenes_aplicaciones', 'pk': 'cod_orden'},
-      {'nombre': 'recetas_aplicaciones', 'pk': 'cod_receta'},
-      {'nombre': 'fenologia_parametros', 'pk': 'id'},
-      {'nombre': 'lecturas_fenologia', 'pk': 'id,id_reg'},
-      {'nombre': 'lecturas_trampas', 'pk': 'id,id_reg'},
-      {'nombre': 'parametros_aplic', 'pk': 'id'},
-      {'nombre': 'config_app_enlaces', 'pk': 'id'},
-      {'nombre': 'insumos_detalles', 'pk': 'cod_mov'},
-    ];
+    await SyncEsquema.asegurar(db);
 
-    for (final t in tablas) {
-      final String tabla = t['nombre']!;
-      final String pkConfig = t['pk']!;
-      final List<String> columnasPk = pkConfig.split(',').map((e) => e.trim()).toList();
-
-      int from = 0;
-      bool hayMas = true;
-
-      while (hayMas) {
-        List<dynamic> dataRemota = [];
-        try {
-          final dynamic res = await client
-              .from(tabla)
-              .select()
-              .range(from, from + _chunkSize - 1);
-
-          if (res is List) {
-            dataRemota = res;
-          }
-        } catch (e) {
-          debugPrint("Aviso al descargar tabla $tabla: $e");
-          hayMas = false;
-          break;
-        }
-
-        if (dataRemota.isEmpty) {
-          hayMas = false;
-          break;
-        }
-
-        Batch batch = db.batch();
-        int insercionesEnLote = 0;
-
-
-        for (var row in dataRemota) {
-          final Map<String, dynamic> filaArriba = Map<String, dynamic>.from(row as Map);
-
-          if (tabla == 'catalogo_insumos') {
-            if (filaArriba.containsKey('principio activo')) {
-              filaArriba['principio_activo'] = filaArriba['principio activo'];
-              filaArriba.remove('principio activo');
-            }
-          }
-
-          if (tabla == 'recetas_aplicaciones') {
-            filaArriba['sincronizado'] = 1;
-          }
-
-          String whereClause = '';
-          List<dynamic> whereArgs = [];
-
-          if (columnasPk.length == 1) {
-            final col = columnasPk.first;
-            whereClause = '$col = ?';
-            whereArgs = [filaArriba[col]];
-          } else {
-            whereClause = columnasPk.map((col) => '$col = ?').join(' AND ');
-            whereArgs = columnasPk.map((col) => filaArriba[col]).toList();
-          }
-
-          final List<Map<String, dynamic>> registrosAbajo = await db.query(
-            tabla,
-            where: whereClause,
-            whereArgs: whereArgs,
-            limit: 1,
-          );
-
-          bool huboCambio = false;
-
-          if (registrosAbajo.isEmpty) {
-            huboCambio = true; // Si no existe localmente, se inserta sí o sí
-          } else {
-            final Map<String, dynamic> filaAbajo = registrosAbajo.first;
-
-            for (final entrada in filaArriba.entries) {
-              final String col = entrada.key;
-              final dynamic valArriba = entrada.value;
-
-              if (col == 'sincronizado') continue;
-
-              if (filaAbajo.containsKey(col)) {
-                final dynamic valAbajo = filaAbajo[col];
-                if (!_sonValoresIguales(valArriba, valAbajo)) {
-                  huboCambio = true;
-                  break;
-                }
-              } else {
-                huboCambio = true;
-                break;
-              }
-            }
-          }
-
-          // 💡 Si hay cambios O si la tabla local estaba completamente vacía, guardamos en lote
-          if (huboCambio) {
-            batch.insert(
-              tabla,
-              filaArriba,
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-            insercionesEnLote++;
-          }
-        }
-
-        if (insercionesEnLote > 0) {
-          await batch.commit(noResult: true);
-        }
-
-        if (dataRemota.length < _chunkSize) {
-          hayMas = false;
-        } else {
-          from += _chunkSize;
-        }
+    // Los INSERT OR REPLACE con sincronizado = 1 no disparan los triggers
+    // (el borrado implícito del REPLACE no dispara AFTER DELETE con
+    // recursive_triggers apagado). La pausa se usa solo en la reconciliación,
+    // dentro de una transacción, para no perder cambios del usuario.
+    for (final t in SyncConfig.tablas) {
+      if (!t.bajar) continue;
+      onProgreso?.call('Descargando ${t.nombre}…');
+      try {
+        await _bajarTabla(db, client, t);
+      } catch (e) {
+        debugPrint("Aviso al bajar ${t.nombre}: $e");
       }
     }
 
     return rolCambio;
+  }
+
+  static Future<void> _bajarTabla(
+    Database db,
+    SupabaseClient client,
+    TablaSync t,
+  ) async {
+    final String tabla = t.nombre;
+    if (!await SyncEsquema.existeTabla(db, tabla)) return;
+
+    final Set<String> colsLocales = await SyncEsquema.columnas(db, tabla);
+    if (!t.pk.every(colsLocales.contains)) return;
+    final bool tieneMarca = colsLocales.contains('sincronizado');
+
+    // Estado local completo en memoria (una sola consulta por tabla).
+    final List<Map<String, dynamic>> filasLocales = await db.query(tabla);
+    final Map<String, Map<String, dynamic>> locales = {
+      for (final f in filasLocales) SyncConfig.claveFila(t, f): f,
+    };
+
+    final Set<String> clavesRemotas = {};
+    bool descargaCompleta = true;
+    bool ordenar = true; // orden estable para paginar sin saltear filas
+    int from = 0;
+    int paginas = 0;
+
+    while (true) {
+      List<dynamic> dataRemota = [];
+      try {
+        dynamic q = client.from(tabla).select();
+        if (ordenar) {
+          for (final c in t.pk) {
+            q = q.order(c, ascending: true);
+          }
+        }
+        final dynamic res = await q.range(from, from + _chunkSize - 1);
+        if (res is List) dataRemota = res;
+      } catch (e) {
+        if (ordenar) {
+          // Si no se puede ordenar por la clave, se reintenta sin orden.
+          ordenar = false;
+          continue;
+        }
+        debugPrint("Aviso al descargar tabla $tabla: $e");
+        descargaCompleta = false;
+        break;
+      }
+
+      if (dataRemota.isEmpty) break;
+      paginas++;
+
+      final List<Map<String, dynamic>> aGrabar = [];
+      for (final row in dataRemota) {
+        final Map<String, dynamic> filaArriba =
+            Map<String, dynamic>.from(row as Map);
+
+        if (tabla == 'catalogo_insumos' &&
+            filaArriba.containsKey('principio activo')) {
+          filaArriba['principio_activo'] = filaArriba.remove('principio activo');
+        }
+
+        // Solo columnas que existen localmente (evita errores de insert).
+        filaArriba.removeWhere((k, _) => !colsLocales.contains(k));
+        if (t.pk.any((c) => filaArriba[c] == null)) continue;
+
+        final String clave = SyncConfig.claveFila(t, filaArriba);
+        clavesRemotas.add(clave);
+
+        final Map<String, dynamic>? filaAbajo = locales[clave];
+
+        bool huboCambio = filaAbajo == null;
+        if (!huboCambio) {
+          for (final entrada in filaArriba.entries) {
+            if (entrada.key == 'sincronizado') continue;
+            if (!_sonValoresIguales(entrada.value, filaAbajo[entrada.key])) {
+              huboCambio = true;
+              break;
+            }
+          }
+        }
+
+        if (huboCambio) {
+          if (tieneMarca) filaArriba['sincronizado'] = 1;
+          aGrabar.add(filaArriba);
+        }
+      }
+
+      if (aGrabar.isNotEmpty) {
+        // En transacción: las escrituras del usuario esperan, y los pendientes
+        // (sincronizado <> 1 o en cola de borrado) se releen justo antes.
+        await db.transaction((txn) async {
+          final Set<String> protegidas =
+              await _clavesProtegidas(txn, t, tieneMarca);
+          final Batch batch = txn.batch();
+          for (final f in aGrabar) {
+            if (protegidas.contains(SyncConfig.claveFila(t, f))) continue;
+            batch.insert(tabla, f, conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+          await batch.commit(noResult: true);
+        });
+      }
+
+      // Se avanza por lo recibido y se corta con página vacía: si el servidor
+      // limita max_rows por debajo de _chunkSize no se pierden filas.
+      from += dataRemota.length;
+    }
+
+    // Sin orden estable y con varias páginas no hay garantía de haber
+    // recibido todo: en ese caso no se reconcilia.
+    if (!ordenar && paginas > 1) descargaCompleta = false;
+
+    // Reconciliación de borrados hechos en el servidor.
+    // Protección extra: si arriba no vino nada, no se toca lo local
+    // (puede ser un problema de permisos o conexión).
+    if (!t.reconciliar || !descargaCompleta || clavesRemotas.isEmpty) return;
+
+    final List<Map<String, dynamic>> aBorrar = [
+      for (final e in locales.entries)
+        if (!clavesRemotas.contains(e.key)) e.value,
+    ];
+    if (aBorrar.isEmpty) return;
+
+    int borrados = 0;
+    await db.transaction((txn) async {
+      final Set<String> protegidas =
+          await _clavesProtegidas(txn, t, tieneMarca);
+      // Pausa solo dentro de la transacción: no se encolan estos borrados.
+      await SyncEsquema.pausar(txn);
+      final Batch borrar = txn.batch();
+      final where = t.pk.map((c) => '"$c" = ?').join(' AND ');
+      for (final f in aBorrar) {
+        if (protegidas.contains(SyncConfig.claveFila(t, f))) continue;
+        borrar.delete(
+          tabla,
+          where: tieneMarca ? '$where AND sincronizado = 1' : where,
+          whereArgs: t.pk.map((c) => f[c]).toList(),
+        );
+        borrados++;
+      }
+      await borrar.commit(noResult: true);
+      await SyncEsquema.reanudar(txn);
+    });
+    if (borrados > 0) {
+      debugPrint('Sync: $borrados registros de $tabla ya no existen arriba, borrados localmente');
+    }
+  }
+
+  /// Claves que la bajada NO debe tocar: filas con cambios locales sin subir
+  /// (sincronizado distinto de 1, incluido NULL) y claves en cola de borrado.
+  static Future<Set<String>> _clavesProtegidas(
+    DatabaseExecutor txn,
+    TablaSync t,
+    bool tieneMarca,
+  ) async {
+    final Set<String> r = {};
+    if (tieneMarca) {
+      final filas = await txn.query(
+        t.nombre,
+        columns: t.pk,
+        where: 'sincronizado IS NOT 1',
+      );
+      for (final f in filas) {
+        r.add(SyncConfig.claveFila(t, f));
+      }
+    }
+    try {
+      final cola = await txn.query(
+        SyncEsquema.tablaEliminados,
+        columns: ['clave'],
+        where: 'tabla = ?',
+        whereArgs: [t.nombre],
+      );
+      for (final c in cola) {
+        r.add((c['clave']?.toString() ?? '')
+            .split('|')
+            .map(SyncConfig.claveValor)
+            .join('|'));
+      }
+    } catch (_) {}
+    return r;
   }
 
   static void _mostrarBloqueoLicencia(BuildContext context) {
