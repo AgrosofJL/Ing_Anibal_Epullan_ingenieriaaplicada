@@ -1011,7 +1011,10 @@ class AgroButton extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.symmetric(
                   horizontal: compacto ? 12 : 18, vertical: 8),
-              child: Center(widthFactor: expandido ? null : 1, child: child),
+              child: Center(
+                  widthFactor: expandido ? null : 1,
+                  heightFactor: 1,
+                  child: child),
             ),
           ),
         ),
