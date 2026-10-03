@@ -30,7 +30,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -267,6 +267,55 @@ await db.execute('''
     ''');
 
     await _crearTablasCampo(db);
+    await _crearTablasPresupuestos(db);
+  }
+
+  /// Presupuestos / pedidos de cotización (cabecera + renglones).
+  Future<void> _crearTablasPresupuestos(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS presupuestos (
+        cod_presupuesto TEXT PRIMARY KEY,
+        numero INTEGER,
+        titulo TEXT,
+        fecha TEXT,
+        destinatario TEXT,
+        emisor TEXT,
+        cod_productor INTEGER,
+        moneda TEXT,
+        iva_modo TEXT,
+        iva_porc REAL,
+        subtotal REAL,
+        iva REAL,
+        total REAL,
+        validez_dias INTEGER,
+        condiciones TEXT,
+        texto_cierre TEXT,
+        firmante TEXT,
+        estado TEXT,
+        usuario TEXT,
+        created_at TEXT,
+        actualizado_el TEXT,
+        sincronizado INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS presupuestos_items (
+        cod_item TEXT PRIMARY KEY,
+        cod_presupuesto TEXT,
+        orden INTEGER,
+        servicio TEXT,
+        detalle TEXT,
+        cantidad REAL,
+        unidad TEXT,
+        precio_unitario REAL,
+        importe REAL,
+        sincronizado INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_presup_items_cod ON presupuestos_items (cod_presupuesto)');
   }
 
   Future<void> _crearTablasCampo(Database db) async {
@@ -398,6 +447,9 @@ await db.execute('''
       await _agregarColumnaSiFalta(db, 'recetas_aplicaciones', 'variedades', 'TEXT');
       await _agregarColumnaSiFalta(db, 'ordenes_aplicaciones', 'cultivos', 'TEXT');
       await _agregarColumnaSiFalta(db, 'ordenes_aplicaciones', 'variedades', 'TEXT');
+    }
+    if (oldV < 11) {
+      await _crearTablasPresupuestos(db);
     }
   }
 

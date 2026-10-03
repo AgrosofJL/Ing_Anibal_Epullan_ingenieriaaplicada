@@ -9,6 +9,7 @@ import 'base/base.dart';
 import 'campo/menu_campo.dart';
 import 'constantes/tema.dart';
 import 'loguer.dart';
+import 'presupuestos/servicios/presupuestos.dart';
 import 'productores/productores.dart';
 import 'productos/catalogo.dart';
 import 'reportes/menu_reportes.dart';
@@ -395,6 +396,20 @@ class _MenuCentralState extends State<MenuCentral>
           nombreProductor: _nombreProductorActivo,
         )),
       ),
+      if (_esIngenieroOAdmin)
+        _ModuloDef(
+          titulo: "Presupuestos",
+          subtitulo: "COTIZACIONES EN PDF",
+          descripcion:
+              "Armá pedidos de cotización con tu logo, guardalos y compartilos en PDF.",
+          icono: Icons.request_quote_outlined,
+          color: const Color(0xFF6A4FB3),
+          tag: "Comercial",
+          onTap: () => _abrir(PresupuestosScreen(
+            codProductor: _codProductorActivo,
+            nombreProductor: _nombreProductorActivo,
+          )),
+        ),
       if (_userRole == 'ADMIN' || _userRole == 'INGENIERO')
         _ModuloDef(
           titulo: "Gestión de Productores",

@@ -83,6 +83,10 @@ class SyncConfig {
     TablaSync('lecturas_trampas', ['id', 'id_reg']),
     TablaSync('aplicaciones_registros', ['registro']),
     TablaSync('insumos_detalles', ['cod_mov']),
+
+    // Presupuestos (cabecera antes que renglones)
+    TablaSync('presupuestos', ['cod_presupuesto']),
+    TablaSync('presupuestos_items', ['cod_item']),
   ];
 
   static TablaSync? porNombre(String nombre) {
